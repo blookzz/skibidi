@@ -255,10 +255,10 @@ function UILib.CreatePanel(Options)
 		TabBar.BackgroundTransparency = 1
 		TabBar.ZIndex                 = 2
 		TabBar.Parent                 = Frame
-		-- Top/bottom padding shifted by 7px (11->4, 2->9) so the tab
-		-- buttons sit centered between the header underline above and
-		-- the tab underline below, instead of hugging the bottom.
-		MakePadding(TabBar, 10, 10, 4, 9)
+		-- Shifted down 2px from the previous pass (top 4->6, bottom 9->7)
+		-- so the tab buttons sit centered between the header underline
+		-- above and the tab underline below.
+		MakePadding(TabBar, 10, 10, 6, 7)
 		MakeListLayout(TabBar, Enum.FillDirection.Horizontal, 6,
 			Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Center)
 
@@ -271,11 +271,16 @@ function UILib.CreatePanel(Options)
 		TabUnderline.ZIndex                 = 2
 		TabUnderline.Parent                 = Frame
 
+		-- Every tab gets an equal share of the bar's width instead of
+		-- sizing itself to its own text — long labels can overflow their
+		-- button, which is fine, but the buttons themselves stay uniform.
+		local tabGap = 6
+		local tabW   = (Width - 20 - tabGap * (#Tabs - 1)) / #Tabs
+
 		TabBtns = {}
 		for i, name in ipairs(Tabs) do
 			local btn = Instance.new("TextButton")
-			btn.Size              = UDim2.new(0, 0, 1, 0)
-			btn.AutomaticSize     = Enum.AutomaticSize.X
+			btn.Size              = UDim2.new(0, tabW, 1, 0)
 			btn.LayoutOrder       = i
 			btn.BackgroundColor3  = Theme.Bg2
 			btn.BorderSizePixel   = 0
@@ -528,7 +533,7 @@ function UILib.CreateSection(Parent, Options)
 	Wrapper.AutomaticSize    = Enum.AutomaticSize.Y
 	Wrapper.BackgroundColor3 = Theme.Bg2
 	Wrapper.BorderSizePixel  = 0
-	Wrapper.ClipsDescendants = false
+	Wrapper.ClipsDescendants = true
 	Wrapper.Parent           = Parent
 	MakeCorner(Wrapper, UDim.new(0, 7))
 	MakeStroke(Wrapper, Theme.AccentDim, 1)
@@ -575,7 +580,7 @@ function UILib.CreateSection(Parent, Options)
 	Arrow.TextSize               = 14
 	Arrow.TextColor3             = Theme.AccentDim
 	Arrow.TextXAlignment         = Enum.TextXAlignment.Center
-	Arrow.Text                   = "▾"
+	Arrow.Text                   = "▼"
 
 	-- Divider below header
 	local Divider = Instance.new("Frame", Wrapper)
@@ -602,7 +607,7 @@ function UILib.CreateSection(Parent, Options)
 		isOpen = open
 		Content.Visible  = open
 		Divider.Visible  = open
-		Arrow.Text       = open and "▾" or "▸"
+		Arrow.Text       = open and "▲" or "▼"
 		TweenService:Create(Arrow, TweenFast,
 			{ TextColor3 = open and Theme.Accent or Theme.AccentDim }):Play()
 	end
@@ -1523,6 +1528,8 @@ end
 -- ============================================================
 function UILib.CreateHStack(Parent, Options)
 	Options = Options or {}
+	local gap = Options.Spacing or 6
+
 	local Stack = Instance.new("Frame")
 	Stack.BackgroundTransparency = 1
 	Stack.BorderSizePixel        = 0
@@ -1533,9 +1540,30 @@ function UILib.CreateHStack(Parent, Options)
 		Stack.Size          = UDim2.new(1, 0, 0, 0)
 		Stack.AutomaticSize = Enum.AutomaticSize.Y
 	end
-	MakeListLayout(Stack, Enum.FillDirection.Horizontal, Options.Spacing or 6,
+	MakeListLayout(Stack, Enum.FillDirection.Horizontal, gap,
 		Options.HorizontalAlignment or Enum.HorizontalAlignment.Left,
 		Options.VerticalAlignment or Enum.VerticalAlignment.Center)
+
+	-- Every other CreateXxx helper builds a full-width "row" component
+	-- (Size.X.Scale = 1) since it's normally the only thing in its row.
+	-- Dropped into a horizontal stack that would make each child fight
+	-- for the whole width, so give every direct child an equal share
+	-- instead — the same fixed, non-text-dependent split used for tabs.
+	local function relayout()
+		local kids = {}
+		for _, c in ipairs(Stack:GetChildren()) do
+			if c:IsA("GuiObject") then table.insert(kids, c) end
+		end
+		local n = #kids
+		if n == 0 then return end
+		local shareOffset = -(gap * (n - 1)) / n
+		for _, c in ipairs(kids) do
+			c.Size = UDim2.new(1 / n, shareOffset, c.Size.Y.Scale, c.Size.Y.Offset)
+		end
+	end
+	Stack.ChildAdded:Connect(relayout)
+	Stack.ChildRemoved:Connect(relayout)
+
 	return { Frame = Stack }
 end
 
@@ -1700,6 +1728,7 @@ function UILib.CreateDropdown(Parent, Options)
 	Card.AutomaticSize     = Enum.AutomaticSize.Y
 	Card.BackgroundColor3  = Theme.Bg2
 	Card.BorderSizePixel   = 0
+	Card.ClipsDescendants  = true
 	Card.Parent            = Parent
 	MakeCorner(Card, UDim.new(0, 7))
 	MakeStroke(Card, Theme.AccentDim, 1)
@@ -1744,7 +1773,7 @@ function UILib.CreateDropdown(Parent, Options)
 	Chevron.Font                   = Theme.FontIcon
 	Chevron.TextSize               = 12
 	Chevron.TextColor3             = Theme.AccentDim
-	Chevron.Text                   = "▾"
+	Chevron.Text                   = "▼"
 
 	local List = Instance.new("Frame", Card)
 	List.Size                   = UDim2.new(1, 0, 0, 0)
@@ -1775,7 +1804,10 @@ function UILib.CreateDropdown(Parent, Options)
 	local function refreshRows()
 		for val, row in pairs(optRows) do
 			local on = selected[val] == true
-			row.Check.TextTransparency = on and 0 or 1
+			TweenService:Create(row.Dot, TweenFast,
+				{ BackgroundColor3 = on and Theme.Accent or Theme.Bg3 }):Play()
+			TweenService:Create(row.Ring, TweenFast,
+				{ Color = on and Theme.Accent or Theme.AccentDim }):Play()
 			row.Lbl.TextColor3 = on and Theme.ActiveTabText or Theme.TextPrimary
 		end
 	end
@@ -1784,7 +1816,7 @@ function UILib.CreateDropdown(Parent, Options)
 	local function setOpen(open)
 		isOpen = open
 		List.Visible = open
-		Chevron.Text = open and "▴" or "▾"
+		Chevron.Text = open and "▲" or "▼"
 	end
 
 	for i, text in ipairs(items) do
@@ -1797,15 +1829,21 @@ function UILib.CreateDropdown(Parent, Options)
 		Row.Text                   = ""
 		MakeCorner(Row, UDim.new(0, 5))
 
-		local Check = Instance.new("TextLabel", Row)
-		Check.Size                   = UDim2.new(0, 18, 1, 0)
-		Check.Position               = UDim2.new(0, 4, 0, 0)
-		Check.BackgroundTransparency = 1
-		Check.Font                   = Theme.FontIcon
-		Check.TextSize               = 12
-		Check.TextColor3             = Theme.Accent
-		Check.Text                   = "✓"
-		Check.TextTransparency       = selected[text] and 0 or 1
+		local RingHolder = Instance.new("Frame", Row)
+		RingHolder.Size             = UDim2.new(0, 14, 0, 14)
+		RingHolder.Position         = UDim2.new(0, 5, 0.5, -7)
+		RingHolder.BackgroundColor3 = Theme.Bg3
+		RingHolder.BorderSizePixel  = 0
+		MakeCorner(RingHolder, UDim.new(1, 0))
+		local ring = MakeStroke(RingHolder, selected[text] and Theme.Accent or Theme.AccentDim, 1.5)
+
+		local Dot = Instance.new("Frame", RingHolder)
+		Dot.AnchorPoint      = Vector2.new(0.5, 0.5)
+		Dot.Position         = UDim2.new(0.5, 0, 0.5, 0)
+		Dot.Size             = UDim2.new(0, 7, 0, 7)
+		Dot.BackgroundColor3 = selected[text] and Theme.Accent or Theme.Bg3
+		Dot.BorderSizePixel  = 0
+		MakeCorner(Dot, UDim.new(1, 0))
 
 		local RLbl = Instance.new("TextLabel", Row)
 		RLbl.Size                   = UDim2.new(1, -28, 1, 0)
@@ -1817,7 +1855,7 @@ function UILib.CreateDropdown(Parent, Options)
 		RLbl.TextXAlignment         = Enum.TextXAlignment.Left
 		RLbl.Text                   = text
 
-		optRows[text] = { Check = Check, Lbl = RLbl }
+		optRows[text] = { Dot = Dot, Ring = ring, Lbl = RLbl }
 
 		Row.MouseButton1Click:Connect(function()
 			if multi then
@@ -2274,6 +2312,7 @@ function UILib.CreateColorPicker(Parent, Options)
 	Card.AutomaticSize     = Enum.AutomaticSize.Y
 	Card.BackgroundColor3  = Theme.Bg2
 	Card.BorderSizePixel   = 0
+	Card.ClipsDescendants  = true
 	Card.Parent            = Parent
 	MakeCorner(Card, UDim.new(0, 7))
 	MakeStroke(Card, Theme.AccentDim, 1)
