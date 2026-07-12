@@ -133,10 +133,11 @@ end
 local function MakeHoverFill(Head, inset, radius)
 	local Fill = Instance.new("Frame")
 	Fill.Size                   = UDim2.new(1, -inset * 2, 1, -inset * 2)
-	Fill.Position                = UDim2.new(0, inset, 0, inset)
+	Fill.Position               = UDim2.new(0, inset, 0, inset)
 	Fill.BackgroundColor3       = Theme.Bg2
 	Fill.BackgroundTransparency = 1
 	Fill.BorderSizePixel        = 0
+	Fill.ZIndex                 = 0   -- render behind all card content
 	Fill.Parent                 = Head
 	MakeCorner(Fill, UDim.new(0, radius or 6))
 
