@@ -2596,9 +2596,10 @@ end
 -- ============================================================
 function UILib.CreateCardList(Parent, Options)
 	Options = Options or {}
-	local multi  = Options.Multi ~= false   -- default true
-	local items  = Options.Items or {}
-	local listH  = Options.Height or 220
+	local multi    = Options.Multi ~= false   -- default true
+	local items    = Options.Items or {}
+	local listH    = Options.Height or 220      -- height of the scroll container (px)
+	local cardH    = Options.CardHeight         -- fixed card height (px); nil = auto-size
 
 	-- Selected state: index → bool
 	local selectedSet = {}
@@ -2668,8 +2669,15 @@ function UILib.CreateCardList(Parent, Options)
 	local function buildCard(i, item)
 		item = item or {}
 		local Card = Instance.new("TextButton")
-		Card.Size                   = UDim2.new(1, 0, 0, 0)
-		Card.AutomaticSize          = Enum.AutomaticSize.Y
+		if cardH then
+			-- Fixed card height: scroll container is independent of card content
+			Card.Size          = UDim2.new(1, 0, 0, cardH)
+			Card.AutomaticSize = Enum.AutomaticSize.None
+		else
+			-- Auto-size: card grows to fit its title + description text
+			Card.Size          = UDim2.new(1, 0, 0, 0)
+			Card.AutomaticSize = Enum.AutomaticSize.Y
+		end
 		Card.BackgroundColor3       = Theme.Bg3
 		Card.BorderSizePixel        = 0
 		Card.AutoButtonColor        = false
