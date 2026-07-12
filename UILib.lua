@@ -2778,7 +2778,25 @@ function UILib.CreateCardList(Parent, Options)
 		cardObjects[i] = obj
 
 		-- Hover feedback (inset fill, same pattern as other heads)
-		MakeHoverFill(Card, 0, 6)
+		-- Hover fill must escape the card's UIPadding (10,10,8,9) to cover
+		-- the full card. We negate the padding in size and position manually.
+		local hf = Instance.new("Frame")
+		hf.Size                   = UDim2.new(1, 10 + 10, 1, 8 + 9)
+		hf.Position               = UDim2.new(0, -10, 0, -8)
+		hf.BackgroundColor3       = Theme.Bg2
+		hf.BackgroundTransparency = 1
+		hf.BorderSizePixel        = 0
+		hf.ZIndex                 = 0
+		hf.Parent                 = Card
+		MakeCorner(hf, UDim.new(0, 6))
+		Card.MouseEnter:Connect(function()
+			TweenService:Create(hf, TweenFast, { BackgroundColor3 = Color3.fromRGB(32,30,24) }):Play()
+			hf.BackgroundTransparency = 0
+		end)
+		Card.MouseLeave:Connect(function()
+			TweenService:Create(hf, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
+			task.delay(0.14, function() hf.BackgroundTransparency = 1 end)
+		end)
 
 		Card.MouseButton1Click:Connect(function()
 			if multi then
