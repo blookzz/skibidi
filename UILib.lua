@@ -2778,7 +2778,7 @@ function UILib.CreateCardList(Parent, Options)
 		cardObjects[i] = obj
 
 		-- Hover feedback (inset fill, same pattern as other heads)
-		MakeHoverFill(Card, 3, 5)
+		MakeHoverFill(Card, 0, 6)
 
 		Card.MouseButton1Click:Connect(function()
 			if multi then
