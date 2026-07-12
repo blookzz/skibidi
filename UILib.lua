@@ -2568,6 +2568,263 @@ function UILib.Init(Options)
 end
 
 -- ============================================================
+-- CreateCardList
+-- A scrollable list of selectable cards.  Each card has a big
+-- title and a smaller description line.  Clicking a card calls
+-- OnSelect, and the card is toggled into a highlighted selected
+-- state.  Multiple cards can be selected simultaneously.
+--
+-- Options:
+--   Items        table   Array of { Title, Description } tables
+--   Multi        bool    Allow multiple selections (default true)
+--   Height       number  Fixed scroll-frame height (default 220)
+--   OnSelect     function(index, title, selected)
+--                        Called when a card is toggled.
+--                        `selected` is the new state of *this* card.
+--   OnChange     function(selectedIndices)
+--                        Called after any selection change with the
+--                        full array of currently selected indices.
+--
+-- Returns:
+--   {
+--     Frame,
+--     GetSelected()            → table of selected indices (sorted)
+--     SetSelected(indices)     → set selection programmatically
+--     ClearSelected()          → deselect all
+--     SetItems(items)          → replace the whole list
+--   }
+-- ============================================================
+function UILib.CreateCardList(Parent, Options)
+	Options = Options or {}
+	local multi  = Options.Multi ~= false   -- default true
+	local items  = Options.Items or {}
+	local listH  = Options.Height or 220
+
+	-- Selected state: index → bool
+	local selectedSet = {}
+
+	-- ── Outer wrapper ─────────────────────────────────────────
+	local Wrapper = Instance.new("Frame")
+	Wrapper.Size             = UDim2.new(1, 0, 0, listH)
+	Wrapper.BackgroundColor3 = Theme.Bg2
+	Wrapper.BorderSizePixel  = 0
+	Wrapper.ClipsDescendants = true
+	Wrapper.Parent           = Parent
+	MakeCorner(Wrapper, UDim.new(0, 7))
+	MakeStroke(Wrapper, Theme.AccentDim, 1)
+
+	-- ── ScrollingFrame ────────────────────────────────────────
+	local Scroll = Instance.new("ScrollingFrame", Wrapper)
+	Scroll.Size                    = UDim2.new(1, 0, 1, 0)
+	Scroll.BackgroundTransparency  = 1
+	Scroll.BorderSizePixel         = 0
+	Scroll.ScrollBarThickness      = 3
+	Scroll.ScrollBarImageColor3    = Theme.AccentDim
+	Scroll.CanvasSize              = UDim2.new(0, 0, 0, 0)
+	Scroll.AutomaticCanvasSize     = Enum.AutomaticSize.Y
+	Scroll.VerticalScrollBarInset  = Enum.ScrollBarInset.ScrollBar
+	Scroll.ClipsDescendants        = true
+	MakePadding(Scroll, 6, 6, 6, 6)
+	MakeListLayout(Scroll, Enum.FillDirection.Vertical, 5)
+
+	-- ── Card builder ──────────────────────────────────────────
+	local cardObjects = {}   -- index → { Card, TitleLbl, DescLbl, Dot, Stroke, Index }
+
+	local function fireCallbacks(idx, newState)
+		if Options.OnSelect then
+			Options.OnSelect(idx, items[idx] and items[idx].Title or "", newState)
+		end
+		if Options.OnChange then
+			local sel = {}
+			for i in pairs(selectedSet) do table.insert(sel, i) end
+			table.sort(sel)
+			Options.OnChange(sel)
+		end
+	end
+
+	local function refreshCard(obj)
+		local on = selectedSet[obj.Index] == true
+		-- Background
+		TweenService:Create(obj.Card, TweenFast, {
+			BackgroundColor3 = on and Color3.fromRGB(38, 30, 10) or Theme.Bg3,
+		}):Play()
+		-- Outer stroke
+		TweenService:Create(obj.Stroke, TweenFast, {
+			Color = on and Theme.Accent or Theme.AccentDim,
+		}):Play()
+		-- Selection dot
+		TweenService:Create(obj.Ring, TweenFast, {
+			Color = on and Theme.Accent or Theme.AccentDim,
+		}):Play()
+		TweenService:Create(obj.Dot, TweenFast, {
+			BackgroundColor3 = on and Theme.Accent or Theme.Bg2,
+		}):Play()
+		-- Title colour
+		TweenService:Create(obj.TitleLbl, TweenFast, {
+			TextColor3 = on and Theme.AccentSec or Theme.TextPrimary,
+		}):Play()
+	end
+
+	local function buildCard(i, item)
+		item = item or {}
+		local Card = Instance.new("TextButton")
+		Card.Size                   = UDim2.new(1, 0, 0, 0)
+		Card.AutomaticSize          = Enum.AutomaticSize.Y
+		Card.BackgroundColor3       = Theme.Bg3
+		Card.BorderSizePixel        = 0
+		Card.AutoButtonColor        = false
+		Card.Text                   = ""
+		Card.LayoutOrder            = i
+		Card.ClipsDescendants       = true
+		Card.Parent                 = Scroll
+		MakeCorner(Card, UDim.new(0, 6))
+		local stroke = MakeStroke(Card, Theme.AccentDim, 1)
+		MakePadding(Card, 10, 10, 8, 9)
+		MakeListLayout(Card, Enum.FillDirection.Vertical, 3)
+
+		-- Row: selection ring/dot + title
+		local TitleRow = Instance.new("Frame", Card)
+		TitleRow.Size                   = UDim2.new(1, 0, 0, 0)
+		TitleRow.AutomaticSize          = Enum.AutomaticSize.Y
+		TitleRow.BackgroundTransparency = 1
+		TitleRow.LayoutOrder            = 0
+		MakeListLayout(TitleRow, Enum.FillDirection.Horizontal, 8,
+			Enum.HorizontalAlignment.Left, Enum.VerticalAlignment.Center)
+
+		-- Ring + dot (same visual language as Group / Dropdown)
+		local RingHolder = Instance.new("Frame", TitleRow)
+		RingHolder.Size             = UDim2.new(0, 14, 0, 14)
+		RingHolder.BackgroundColor3 = Theme.Bg2
+		RingHolder.BorderSizePixel  = 0
+		RingHolder.LayoutOrder      = 0
+		MakeCorner(RingHolder, UDim.new(1, 0))
+		local ring = MakeStroke(RingHolder, Theme.AccentDim, 1.5)
+
+		local Dot = Instance.new("Frame", RingHolder)
+		Dot.AnchorPoint      = Vector2.new(0.5, 0.5)
+		Dot.Position         = UDim2.new(0.5, 0, 0.5, 0)
+		Dot.Size             = UDim2.new(0, 7, 0, 7)
+		Dot.BackgroundColor3 = Theme.Bg2
+		Dot.BorderSizePixel  = 0
+		MakeCorner(Dot, UDim.new(1, 0))
+
+		local TitleLbl = Instance.new("TextLabel", TitleRow)
+		TitleLbl.Size                   = UDim2.new(1, -(14 + 8), 0, 0)
+		TitleLbl.AutomaticSize          = Enum.AutomaticSize.Y
+		TitleLbl.BackgroundTransparency = 1
+		TitleLbl.Font                   = Theme.FontMedium
+		TitleLbl.TextSize               = Theme.BodySize + 1
+		TitleLbl.TextColor3             = Theme.TextPrimary
+		TitleLbl.TextXAlignment         = Enum.TextXAlignment.Left
+		TitleLbl.TextWrapped            = true
+		TitleLbl.LayoutOrder            = 1
+		TitleLbl.Text                   = item.Title or ""
+
+		-- Description line
+		local DescLbl = Instance.new("TextLabel", Card)
+		DescLbl.Size                   = UDim2.new(1, 0, 0, 0)
+		DescLbl.AutomaticSize          = Enum.AutomaticSize.Y
+		DescLbl.BackgroundTransparency = 1
+		DescLbl.Font                   = Theme.FontRegular
+		DescLbl.TextSize               = Theme.SmallSize
+		DescLbl.TextColor3             = Theme.TextMuted
+		DescLbl.TextXAlignment         = Enum.TextXAlignment.Left
+		DescLbl.TextWrapped            = true
+		DescLbl.LayoutOrder            = 1
+		DescLbl.Text                   = item.Description or ""
+
+		local obj = {
+			Card     = Card,
+			TitleLbl = TitleLbl,
+			DescLbl  = DescLbl,
+			Dot      = Dot,
+			Ring     = ring,
+			Stroke   = stroke,
+			Index    = i,
+		}
+		cardObjects[i] = obj
+
+		-- Hover feedback (inset fill, same pattern as other heads)
+		MakeHoverFill(Card, 3, 5)
+
+		Card.MouseButton1Click:Connect(function()
+			if multi then
+				if selectedSet[i] then
+					selectedSet[i] = nil
+				else
+					selectedSet[i] = true
+				end
+			else
+				-- single-select: deselect everyone else first
+				for j, o in pairs(cardObjects) do
+					if j ~= i and selectedSet[j] then
+						selectedSet[j] = nil
+						refreshCard(o)
+					end
+				end
+				if selectedSet[i] then
+					selectedSet[i] = nil
+				else
+					selectedSet[i] = true
+				end
+			end
+			refreshCard(obj)
+			fireCallbacks(i, selectedSet[i] == true)
+		end)
+
+		return obj
+	end
+
+	local function buildAll(newItems)
+		-- Destroy existing cards
+		for _, obj in pairs(cardObjects) do
+			obj.Card:Destroy()
+		end
+		cardObjects = {}
+		selectedSet = {}
+		items = newItems or {}
+		for i, item in ipairs(items) do
+			buildCard(i, item)
+		end
+	end
+
+	buildAll(items)
+
+	-- ── Public API ────────────────────────────────────────────
+	local function GetSelected()
+		local sel = {}
+		for i in pairs(selectedSet) do table.insert(sel, i) end
+		table.sort(sel)
+		return sel
+	end
+
+	local function SetSelected(indices)
+		selectedSet = {}
+		for _, i in ipairs(indices) do
+			if cardObjects[i] then selectedSet[i] = true end
+		end
+		for _, obj in pairs(cardObjects) do refreshCard(obj) end
+	end
+
+	local function ClearSelected()
+		selectedSet = {}
+		for _, obj in pairs(cardObjects) do refreshCard(obj) end
+	end
+
+	local function SetItems(newItems)
+		buildAll(newItems)
+	end
+
+	return {
+		Frame        = Wrapper,
+		GetSelected  = GetSelected,
+		SetSelected  = SetSelected,
+		ClearSelected = ClearSelected,
+		SetItems     = SetItems,
+	}
+end
+
+-- ============================================================
 -- Convenience lowercase aliases
 -- Exposes each component under a short name in addition to the
 -- primary CreateXxx API, without altering how the components
@@ -2584,6 +2841,7 @@ UILib.hstack      = UILib.CreateHStack
 UILib.image       = UILib.CreateImage
 UILib.input       = UILib.CreateTextInput
 UILib.keybind     = UILib.CreateKeybind
+UILib.cardlist    = UILib.CreateCardList
 UILib.paragraph   = UILib.CreateParagraph
 UILib.progressbar = UILib.CreateProgressBar
 UILib.section     = UILib.CreateSection
@@ -2593,6 +2851,5 @@ UILib.toggle      = UILib.CreateToggle
 UILib.vstack      = UILib.CreateVStack
 UILib.video       = UILib.CreateVideo
 UILib.viewport    = UILib.CreateViewport
-
 
 return UILib
