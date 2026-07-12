@@ -117,6 +117,41 @@ local function MakeListLayout(parent, dir, pad, ha, va)
 	return l
 end
 
+-- Some rows (Section headers, Dropdown/ColorPicker heads) are clickable
+-- TextButtons that span edge-to-edge inside a rounded card, with no
+-- corner/inset of their own. Tinting them directly on hover causes two
+-- problems: the very first hover flashes because BackgroundColor3 was
+-- never initialized (it defaults to white, so the tween starts from
+-- white instead of the theme colour), and the opaque fill paints
+-- straight over the card's rounded corner + outline stroke since it
+-- touches the same edge pixels.
+--
+-- This creates a small inset, independently-rounded highlight layer
+-- inside Head instead of tinting Head itself, so hovering can never
+-- cover the parent card's corners/stroke, and pre-seeds its colour so
+-- there's nothing to flash from.
+local function MakeHoverFill(Head, inset, radius)
+	local Fill = Instance.new("Frame")
+	Fill.Size                   = UDim2.new(1, -inset * 2, 1, -inset * 2)
+	Fill.Position                = UDim2.new(0, inset, 0, inset)
+	Fill.BackgroundColor3       = Theme.Bg2
+	Fill.BackgroundTransparency = 1
+	Fill.BorderSizePixel        = 0
+	Fill.Parent                 = Head
+	MakeCorner(Fill, UDim.new(0, radius or 6))
+
+	Head.MouseEnter:Connect(function()
+		TweenService:Create(Fill, TweenFast, { BackgroundColor3 = Color3.fromRGB(32,30,24) }):Play()
+		Fill.BackgroundTransparency = 0
+	end)
+	Head.MouseLeave:Connect(function()
+		TweenService:Create(Fill, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
+		task.delay(0.14, function() Fill.BackgroundTransparency = 1 end)
+	end)
+
+	return Fill
+end
+
 -- Default parent used by CreatePanel when Options.Parent is omitted.
 -- Overridable in one place via UILib.Init({ Parent = someInstance }).
 local DefaultParent = PlayerGui
@@ -395,7 +430,11 @@ function UILib.CreatePanel(Options)
 		if TabUnderline then TabUnderline.Visible = visible end
 		if visible then
 			for i, sf in ipairs(tabFrames) do
-				sf.Visible = hasTabs and (i == activeTab) or (i == 1)
+				if hasTabs then
+					sf.Visible = (i == activeTab)
+				else
+					sf.Visible = (i == 1)
+				end
 			end
 		else
 			for _, sf in ipairs(tabFrames) do sf.Visible = false end
@@ -552,6 +591,7 @@ function UILib.CreateSection(Parent, Options)
 	HeaderRow.Text                   = ""
 	HeaderRow.AutoButtonColor        = false
 	HeaderRow.Parent                 = Wrapper
+	MakeHoverFill(HeaderRow, 3, 5)
 
 	-- Accent bar
 	local AccentBar = Instance.new("Frame", HeaderRow)
@@ -615,16 +655,6 @@ function UILib.CreateSection(Parent, Options)
 
 	HeaderRow.MouseButton1Click:Connect(function()
 		SetOpen(not isOpen)
-	end)
-	HeaderRow.MouseEnter:Connect(function()
-		TweenService:Create(HeaderRow, TweenFast,
-			{ BackgroundColor3 = Color3.fromRGB(32,30,24) }):Play()
-		HeaderRow.BackgroundTransparency = 0
-	end)
-	HeaderRow.MouseLeave:Connect(function()
-		TweenService:Create(HeaderRow, TweenFast,
-			{ BackgroundColor3 = Theme.Bg2 }):Play()
-		task.delay(0.14, function() HeaderRow.BackgroundTransparency = 1 end)
 	end)
 
 	return {
@@ -1742,6 +1772,7 @@ function UILib.CreateDropdown(Parent, Options)
 	Head.BackgroundTransparency = 1
 	Head.AutoButtonColor        = false
 	Head.Text                   = ""
+	MakeHoverFill(Head, 3, 5)
 
 	local hasLabel = Options.Label and Options.Label ~= ""
 	if hasLabel then
@@ -1891,14 +1922,6 @@ function UILib.CreateDropdown(Parent, Options)
 
 	Head.MouseButton1Click:Connect(function()
 		setOpen(not isOpen)
-	end)
-	Head.MouseEnter:Connect(function()
-		TweenService:Create(Head, TweenFast, { BackgroundColor3 = Color3.fromRGB(32,30,24) }):Play()
-		Head.BackgroundTransparency = 0
-	end)
-	Head.MouseLeave:Connect(function()
-		TweenService:Create(Head, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
-		task.delay(0.14, function() Head.BackgroundTransparency = 1 end)
 	end)
 
 	return {
@@ -2326,6 +2349,7 @@ function UILib.CreateColorPicker(Parent, Options)
 	Head.BackgroundTransparency = 1
 	Head.AutoButtonColor        = false
 	Head.Text                   = ""
+	MakeHoverFill(Head, 3, 5)
 
 	local Lbl = Instance.new("TextLabel", Head)
 	Lbl.Size                   = UDim2.new(1, -60, 1, 0)
@@ -2504,14 +2528,6 @@ function UILib.CreateColorPicker(Parent, Options)
 
 	Head.MouseButton1Click:Connect(function()
 		setOpen(not isOpen)
-	end)
-	Head.MouseEnter:Connect(function()
-		TweenService:Create(Head, TweenFast, { BackgroundColor3 = Color3.fromRGB(32, 30, 24) }):Play()
-		Head.BackgroundTransparency = 0
-	end)
-	Head.MouseLeave:Connect(function()
-		TweenService:Create(Head, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
-		task.delay(0.14, function() Head.BackgroundTransparency = 1 end)
 	end)
 
 	return {
