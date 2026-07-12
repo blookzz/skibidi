@@ -11,6 +11,8 @@ local UILib = {}
 -- ============================================================
 local TweenService     = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
+local TextService      = game:GetService("TextService")
+local RunService       = game:GetService("RunService")
 local Players          = game:GetService("Players")
 local LocalPlayer      = Players.LocalPlayer
 local PlayerGui        = LocalPlayer:WaitForChild("PlayerGui")
@@ -60,6 +62,11 @@ local Theme = {
 	FontBold         = Enum.Font.GothamBlack,
 	FontMedium       = Enum.Font.GothamBold,
 	FontRegular      = Enum.Font.Gotham,
+	-- Gotham/GothamBold/GothamBlack only cover a limited (mostly Latin)
+	-- glyph set. Arrows, chevrons, and checkmarks fall outside that set
+	-- and render as tofu boxes. SourceSansBold has full coverage for
+	-- these symbols, so it's used anywhere a glyph "icon" is drawn.
+	FontIcon         = Enum.Font.SourceSansBold,
 	TitleSize        = 14,
 	BodySize         = 13,
 	SmallSize        = 12,
@@ -109,6 +116,10 @@ local function MakeListLayout(parent, dir, pad, ha, va)
 	l.Parent              = parent
 	return l
 end
+
+-- Default parent used by CreatePanel when Options.Parent is omitted.
+-- Overridable in one place via UILib.Init({ Parent = someInstance }).
+local DefaultParent = PlayerGui
 
 -- ============================================================
 -- CreatePanel
@@ -164,14 +175,13 @@ function UILib.CreatePanel(Options)
 	local TABBAR_H   = hasTabs and Theme.TabHeight or 0
 	local CONTENT_H  = Options.Height or 300
 	local FULL_H     = HEADER_H + TABBAR_H + CONTENT_H
-	local MIN_H      = HEADER_H   -- exact fit when minimized
 
 	-- ── ScreenGui ──────────────────────────────────────────
 	local Gui = Instance.new("ScreenGui")
 	Gui.Name           = Options.Name or "Panel"
 	Gui.ResetOnSpawn   = false
 	Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-	Gui.Parent         = Options.Parent or PlayerGui
+	Gui.Parent         = Options.Parent or DefaultParent
 
 	-- ── Main frame ─────────────────────────────────────────
 	local Frame = Instance.new("Frame")
@@ -245,7 +255,10 @@ function UILib.CreatePanel(Options)
 		TabBar.BackgroundTransparency = 1
 		TabBar.ZIndex                 = 2
 		TabBar.Parent                 = Frame
-		MakePadding(TabBar, 10, 10, 11, 2)
+		-- Top/bottom padding shifted by 7px (11->4, 2->9) so the tab
+		-- buttons sit centered between the header underline above and
+		-- the tab underline below, instead of hugging the bottom.
+		MakePadding(TabBar, 10, 10, 4, 9)
 		MakeListLayout(TabBar, Enum.FillDirection.Horizontal, 6,
 			Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Center)
 
@@ -347,37 +360,98 @@ function UILib.CreatePanel(Options)
 	end
 
 	-- ── Minimize logic ─────────────────────────────────────
+	-- Minimizing happens in two stages instead of collapsing straight
+	-- into the topbar:
+	--   1) collapse height normally (FULL_H -> HEADER_H)
+	--   2) slide the width in sideways until the panel hugs the title,
+	--      so the minimized button sits directly beside the title text
+	--      instead of covering it or leaving a dead gap.
+	-- Restoring reverses the two stages (width out, then height open).
+	-- The hugging width is computed from the *actual rendered* title
+	-- text each time, so it adapts automatically to any title length.
+	local MIN_BTN_W     = 28   -- MinBtn.Size.X
+	local MIN_BTN_RIGHT = 8    -- MinBtn's right margin (see Position above)
+	local TITLE_LEFT    = 14   -- TitleLabel's left offset (see Position above)
+	local TITLE_GAP     = 10   -- breathing room between title text and button
+
+	local function computeMinimizedWidth()
+		local ok, bounds = pcall(TextService.GetTextSize, TextService,
+			TitleLabel.Text, Theme.TitleSize, Theme.FontBold, Vector2.new(2000, HEADER_H))
+		local textW = (ok and bounds and bounds.X) or 60
+		local mw = TITLE_LEFT + textW + TITLE_GAP + MIN_BTN_W + MIN_BTN_RIGHT
+		return math.clamp(mw, 90, Width)
+	end
+
 	local isMinimized = Options.Minimized == true
-	local function applyMinimize(instant)
-		local targetH = isMinimized and MIN_H or FULL_H
-		-- Hide content + tabs when minimized
-		for _, sf in ipairs(tabFrames) do
-			sf.Visible = (not isMinimized) and (tabFrames[1] == sf or
-				(hasTabs and tabFrames[activeTab] == sf))
-		end
-		if not isMinimized and hasTabs then
-			for i, sf in ipairs(tabFrames) do sf.Visible = (i == activeTab) end
-		end
-		if TabBar     then TabBar.Visible     = not isMinimized end
-		if TabUnderline then TabUnderline.Visible = not isMinimized end
-		-- Hide all tab frames when minimized
-		if isMinimized then
+	local minimizeToken = 0
+
+	local function setBodyVisible(visible)
+		if TabBar       then TabBar.Visible       = visible end
+		if TabUnderline then TabUnderline.Visible = visible end
+		if visible then
+			for i, sf in ipairs(tabFrames) do
+				sf.Visible = hasTabs and (i == activeTab) or (i == 1)
+			end
+		else
 			for _, sf in ipairs(tabFrames) do sf.Visible = false end
 		end
+	end
+
+	local function applyMinimize(instant)
+		minimizeToken = minimizeToken + 1
+		local myToken = minimizeToken
+
 		MinBtn.Text = isMinimized and "+" or "–"
 		AccentLine.Visible = not isMinimized
+
 		if instant then
-			Frame.Size = UDim2.new(0, Width, 0, targetH)
+			if isMinimized then
+				setBodyVisible(false)
+				Frame.Size = UDim2.new(0, computeMinimizedWidth(), 0, HEADER_H)
+			else
+				setBodyVisible(true)
+				Frame.Size = UDim2.new(0, Width, 0, FULL_H)
+			end
+			return
+		end
+
+		if isMinimized then
+			-- Stage 1: minimize normally (collapse height into the topbar)
+			setBodyVisible(false)
+			local heightTween = TweenService:Create(Frame, TweenMed,
+				{ Size = UDim2.new(0, Width, 0, HEADER_H) })
+			heightTween.Completed:Connect(function(state)
+				if myToken ~= minimizeToken or state ~= Enum.PlaybackState.Completed then return end
+				-- Stage 2: slide sideways to hug the title
+				local mw = computeMinimizedWidth()
+				TweenService:Create(Frame, TweenMed,
+					{ Size = UDim2.new(0, mw, 0, HEADER_H) }):Play()
+			end)
+			heightTween:Play()
 		else
-			TweenService:Create(Frame, TweenMed,
-				{ Size = UDim2.new(0, Width, 0, targetH) }):Play()
+			-- Stage 1: slide back out to full width
+			local widthTween = TweenService:Create(Frame, TweenMed,
+				{ Size = UDim2.new(0, Width, 0, HEADER_H) })
+			widthTween.Completed:Connect(function(state)
+				if myToken ~= minimizeToken or state ~= Enum.PlaybackState.Completed then return end
+				-- Stage 2: open back up normally
+				setBodyVisible(true)
+				TweenService:Create(Frame, TweenMed,
+					{ Size = UDim2.new(0, Width, 0, FULL_H) }):Play()
+			end)
+			widthTween:Play()
 		end
 	end
 	applyMinimize(true)
 
-	MinBtn.MouseButton1Click:Connect(function()
-		isMinimized = not isMinimized
+	local function SetMinimized(minimized)
+		if isMinimized == minimized then return end
+		isMinimized = minimized
 		applyMinimize(false)
+	end
+
+	MinBtn.MouseButton1Click:Connect(function()
+		SetMinimized(not isMinimized)
 	end)
 	MinBtn.MouseEnter:Connect(function()
 		TweenService:Create(MinBtn, TweenFast, { BackgroundColor3 = Theme.ToggleOn }):Play()
@@ -423,6 +497,8 @@ function UILib.CreatePanel(Options)
 		GetTab       = function(i) return tabFrames[i] end,
 		SetTab       = SetTab,
 		GetActiveTab = function() return activeTab end,
+		SetMinimized = SetMinimized,
+		IsMinimized  = function() return isMinimized end,
 		Accent       = Accent,
 		AccentDim    = AccentDim,
 	}
@@ -495,8 +571,8 @@ function UILib.CreateSection(Parent, Options)
 	Arrow.Size                   = UDim2.new(0, 20, 1, 0)
 	Arrow.Position               = UDim2.new(1, -24, 0, 0)
 	Arrow.BackgroundTransparency = 1
-	Arrow.Font                   = Theme.FontBold
-	Arrow.TextSize               = 12
+	Arrow.Font                   = Theme.FontIcon
+	Arrow.TextSize               = 14
 	Arrow.TextColor3             = Theme.AccentDim
 	Arrow.TextXAlignment         = Enum.TextXAlignment.Center
 	Arrow.Text                   = "▾"
@@ -1266,5 +1342,1202 @@ function UILib.MakeDraggable(Handle, Target)
 			startPos.Y.Scale, startPos.Y.Offset + d.Y)
 	end)
 end
+
+-- ============================================================
+-- CreateParagraph
+-- A static text block: optional bold title + wrapped body text.
+--
+-- Options:
+--   Title     string
+--   Content   string   (also accepts Options.Text)
+--
+-- Returns: { Frame, SetTitle(text), SetText(text) }
+-- ============================================================
+function UILib.CreateParagraph(Parent, Options)
+	Options = Options or {}
+
+	local Card = Instance.new("Frame")
+	Card.Size              = UDim2.new(1, 0, 0, 0)
+	Card.AutomaticSize     = Enum.AutomaticSize.Y
+	Card.BackgroundColor3  = Theme.Bg2
+	Card.BorderSizePixel   = 0
+	Card.Parent            = Parent
+	MakeCorner(Card, UDim.new(0, 7))
+	MakeStroke(Card, Theme.AccentDim, 1)
+	MakePadding(Card, 12, 12, 10, 10)
+	MakeListLayout(Card, Enum.FillDirection.Vertical, 4)
+
+	local TitleLbl
+	if Options.Title and Options.Title ~= "" then
+		TitleLbl = Instance.new("TextLabel", Card)
+		TitleLbl.Size                   = UDim2.new(1, 0, 0, 0)
+		TitleLbl.AutomaticSize          = Enum.AutomaticSize.Y
+		TitleLbl.BackgroundTransparency = 1
+		TitleLbl.Font                   = Theme.FontMedium
+		TitleLbl.TextSize               = Theme.BodySize
+		TitleLbl.TextColor3             = Theme.Accent
+		TitleLbl.TextXAlignment         = Enum.TextXAlignment.Left
+		TitleLbl.TextWrapped            = true
+		TitleLbl.LayoutOrder            = 0
+		TitleLbl.Text                   = Options.Title
+	end
+
+	local Body = Instance.new("TextLabel", Card)
+	Body.Size                   = UDim2.new(1, 0, 0, 0)
+	Body.AutomaticSize          = Enum.AutomaticSize.Y
+	Body.BackgroundTransparency = 1
+	Body.Font                   = Theme.FontRegular
+	Body.TextSize               = Theme.SmallSize
+	Body.TextColor3             = Theme.TextMuted
+	Body.TextXAlignment         = Enum.TextXAlignment.Left
+	Body.TextYAlignment         = Enum.TextYAlignment.Top
+	Body.TextWrapped            = true
+	Body.LayoutOrder            = 1
+	Body.Text                   = Options.Content or Options.Text or ""
+
+	return {
+		Frame    = Card,
+		SetTitle = function(t) if TitleLbl then TitleLbl.Text = t end end,
+		SetText  = function(t) Body.Text = t end,
+	}
+end
+
+-- ============================================================
+-- CreateProgressBar
+-- A labeled row with a filled progress track.
+--
+-- Options:
+--   Label     string
+--   Min       number   (default 0)
+--   Max       number   (default 100)
+--   Default   number   (default Min)
+--   Format    string   string.format pattern for the percent text
+--                      (default "%d%%", receives 0-100)
+--
+-- Returns: { Frame, Update(value, instant), GetValue() }
+-- ============================================================
+function UILib.CreateProgressBar(Parent, Options)
+	Options = Options or {}
+	local Min = Options.Min or 0
+	local Max = Options.Max or 100
+	local cur = math.clamp(Options.Default or Min, Min, Max)
+
+	local Row = Instance.new("Frame")
+	Row.Size             = UDim2.new(1, 0, 0, 40)
+	Row.BackgroundColor3 = Theme.Bg2
+	Row.BorderSizePixel  = 0
+	Row.Parent           = Parent
+	MakeCorner(Row, UDim.new(0, 7))
+	MakeStroke(Row, Theme.AccentDim, 1)
+	MakePadding(Row, 12, 12, 6, 8)
+
+	local TopRow = Instance.new("Frame", Row)
+	TopRow.Size                   = UDim2.new(1, 0, 0, 16)
+	TopRow.BackgroundTransparency = 1
+
+	local Lbl = Instance.new("TextLabel", TopRow)
+	Lbl.Size                   = UDim2.new(1, -46, 1, 0)
+	Lbl.BackgroundTransparency = 1
+	Lbl.Font                   = Theme.FontRegular
+	Lbl.TextSize               = Theme.SmallSize
+	Lbl.TextColor3             = Theme.TextPrimary
+	Lbl.TextXAlignment         = Enum.TextXAlignment.Left
+	Lbl.TextTruncate           = Enum.TextTruncate.AtEnd
+	Lbl.Text                   = Options.Label or ""
+
+	local PctLbl = Instance.new("TextLabel", TopRow)
+	PctLbl.Size                   = UDim2.new(0, 46, 1, 0)
+	PctLbl.Position               = UDim2.new(1, -46, 0, 0)
+	PctLbl.BackgroundTransparency = 1
+	PctLbl.Font                   = Theme.FontMedium
+	PctLbl.TextSize               = Theme.SmallSize
+	PctLbl.TextColor3             = Theme.AccentSec
+	PctLbl.TextXAlignment         = Enum.TextXAlignment.Right
+
+	local Track = Instance.new("Frame", Row)
+	Track.Position         = UDim2.new(0, 0, 0, 22)
+	Track.Size             = UDim2.new(1, 0, 0, 6)
+	Track.BackgroundColor3 = Color3.fromRGB(38, 34, 26)
+	Track.BorderSizePixel  = 0
+	MakeCorner(Track, UDim.new(1, 0))
+
+	local Fill = Instance.new("Frame", Track)
+	Fill.Size             = UDim2.new(0, 0, 1, 0)
+	Fill.BackgroundColor3 = Theme.Accent
+	Fill.BorderSizePixel  = 0
+	MakeCorner(Fill, UDim.new(1, 0))
+
+	local function Update(val, instant)
+		val = math.clamp(val, Min, Max)
+		cur = val
+		local pct = (Max > Min) and (val - Min) / (Max - Min) or 0
+		local fmt = Options.Format or "%d%%"
+		PctLbl.Text = string.format(fmt, math.floor(pct * 100 + 0.5))
+		if instant then
+			Fill.Size = UDim2.new(pct, 0, 1, 0)
+		else
+			TweenService:Create(Fill, TweenMed, { Size = UDim2.new(pct, 0, 1, 0) }):Play()
+		end
+	end
+	Update(cur, true)
+
+	return { Frame = Row, Update = Update, GetValue = function() return cur end }
+end
+
+-- ============================================================
+-- CreateSpace
+-- An invisible spacer, useful inside sections/stacks to add
+-- breathing room without a divider or a component.
+--
+-- Options:
+--   Height   number   (default 8) — used when the parent stacks vertically
+--   Width    number   (default 8) — used when the parent stacks horizontally
+-- ============================================================
+function UILib.CreateSpace(Parent, Options)
+	Options = Options or {}
+	local Spacer = Instance.new("Frame")
+	Spacer.Size                   = UDim2.new(0, Options.Width or 0, 0, Options.Height or 8)
+	if not Options.Width then
+		Spacer.Size = UDim2.new(1, 0, 0, Options.Height or 8)
+	end
+	Spacer.BackgroundTransparency = 1
+	Spacer.BorderSizePixel        = 0
+	Spacer.Parent                 = Parent
+	return { Frame = Spacer }
+end
+
+-- ============================================================
+-- CreateHStack / CreateVStack
+-- Generic layout containers for arranging components in a row
+-- or column, mirroring the section/content building blocks used
+-- throughout the rest of the library.
+--
+-- Options:
+--   Spacing               number   Gap between children (default 6)
+--   HorizontalAlignment    Enum.HorizontalAlignment
+--   VerticalAlignment      Enum.VerticalAlignment
+--   Height                 number   (HStack only — fixes the row height;
+--                                    default auto-fits the tallest child)
+--
+-- Returns: { Frame }
+-- ============================================================
+function UILib.CreateHStack(Parent, Options)
+	Options = Options or {}
+	local Stack = Instance.new("Frame")
+	Stack.BackgroundTransparency = 1
+	Stack.BorderSizePixel        = 0
+	Stack.Parent                 = Parent
+	if Options.Height then
+		Stack.Size = UDim2.new(1, 0, 0, Options.Height)
+	else
+		Stack.Size          = UDim2.new(1, 0, 0, 0)
+		Stack.AutomaticSize = Enum.AutomaticSize.Y
+	end
+	MakeListLayout(Stack, Enum.FillDirection.Horizontal, Options.Spacing or 6,
+		Options.HorizontalAlignment or Enum.HorizontalAlignment.Left,
+		Options.VerticalAlignment or Enum.VerticalAlignment.Center)
+	return { Frame = Stack }
+end
+
+function UILib.CreateVStack(Parent, Options)
+	Options = Options or {}
+	local Stack = Instance.new("Frame")
+	Stack.Size                   = UDim2.new(1, 0, 0, 0)
+	Stack.AutomaticSize          = Enum.AutomaticSize.Y
+	Stack.BackgroundTransparency = 1
+	Stack.BorderSizePixel        = 0
+	Stack.Parent                 = Parent
+	MakeListLayout(Stack, Enum.FillDirection.Vertical, Options.Spacing or 6,
+		Options.HorizontalAlignment or Enum.HorizontalAlignment.Left,
+		Options.VerticalAlignment or Enum.VerticalAlignment.Top)
+	return { Frame = Stack }
+end
+
+-- ============================================================
+-- CreateGroup
+-- A labeled set of mutually-exclusive radio-style options.
+--
+-- Options:
+--   Label      string
+--   Options    table    Array of option strings
+--   Default    number   Initially selected index (default 1)
+--   OnChanged  function(index, value)
+--
+-- Returns: { Frame, SetValue(index), GetValue() }
+-- ============================================================
+function UILib.CreateGroup(Parent, Options)
+	Options = Options or {}
+	local items   = Options.Options or {}
+	local current = Options.Default or 1
+
+	local Card = Instance.new("Frame")
+	Card.Size              = UDim2.new(1, 0, 0, 0)
+	Card.AutomaticSize     = Enum.AutomaticSize.Y
+	Card.BackgroundColor3  = Theme.Bg2
+	Card.BorderSizePixel   = 0
+	Card.Parent            = Parent
+	MakeCorner(Card, UDim.new(0, 7))
+	MakeStroke(Card, Theme.AccentDim, 1)
+	MakePadding(Card, 8, 8, 8, 8)
+	MakeListLayout(Card, Enum.FillDirection.Vertical, 2)
+
+	if Options.Label and Options.Label ~= "" then
+		local Lbl = Instance.new("TextLabel", Card)
+		Lbl.Size                   = UDim2.new(1, 0, 0, 20)
+		Lbl.BackgroundTransparency = 1
+		Lbl.Font                   = Theme.FontMedium
+		Lbl.TextSize               = Theme.SmallSize
+		Lbl.TextColor3             = Theme.Accent
+		Lbl.TextXAlignment         = Enum.TextXAlignment.Left
+		Lbl.LayoutOrder            = 0
+		Lbl.Text                   = Options.Label
+	end
+
+	local rows = {}
+	local function refresh()
+		for i, row in ipairs(rows) do
+			local on = (i == current)
+			TweenService:Create(row.Dot, TweenFast,
+				{ BackgroundColor3 = on and Theme.Accent or Theme.Bg3 }):Play()
+			TweenService:Create(row.Ring, TweenFast,
+				{ Color = on and Theme.Accent or Theme.AccentDim }):Play()
+			row.Lbl.TextColor3 = on and Theme.ActiveTabText or Theme.TextPrimary
+		end
+	end
+
+	for i, text in ipairs(items) do
+		local Row = Instance.new("TextButton", Card)
+		Row.Size                   = UDim2.new(1, 0, 0, 28)
+		Row.LayoutOrder            = i
+		Row.BackgroundColor3       = Theme.Bg2
+		Row.BackgroundTransparency = 1
+		Row.AutoButtonColor        = false
+		Row.Text                   = ""
+		MakeCorner(Row, UDim.new(0, 5))
+
+		local RingHolder = Instance.new("Frame", Row)
+		RingHolder.Size             = UDim2.new(0, 16, 0, 16)
+		RingHolder.Position         = UDim2.new(0, 2, 0.5, -8)
+		RingHolder.BackgroundColor3 = Theme.Bg3
+		RingHolder.BorderSizePixel  = 0
+		MakeCorner(RingHolder, UDim.new(1, 0))
+		local ring = MakeStroke(RingHolder, Theme.AccentDim, 1.5)
+
+		local Dot = Instance.new("Frame", RingHolder)
+		Dot.AnchorPoint      = Vector2.new(0.5, 0.5)
+		Dot.Position         = UDim2.new(0.5, 0, 0.5, 0)
+		Dot.Size             = UDim2.new(0, 8, 0, 8)
+		Dot.BackgroundColor3 = Theme.Bg3
+		Dot.BorderSizePixel  = 0
+		MakeCorner(Dot, UDim.new(1, 0))
+
+		local Lbl = Instance.new("TextLabel", Row)
+		Lbl.Size                   = UDim2.new(1, -30, 1, 0)
+		Lbl.Position               = UDim2.new(0, 26, 0, 0)
+		Lbl.BackgroundTransparency = 1
+		Lbl.Font                   = Theme.FontRegular
+		Lbl.TextSize               = Theme.BodySize
+		Lbl.TextColor3             = Theme.TextPrimary
+		Lbl.TextXAlignment         = Enum.TextXAlignment.Left
+		Lbl.Text                   = text
+
+		rows[i] = { Dot = Dot, Ring = ring, Lbl = Lbl }
+
+		Row.MouseButton1Click:Connect(function()
+			current = i
+			refresh()
+			if Options.OnChanged then Options.OnChanged(i, text) end
+		end)
+		Row.MouseEnter:Connect(function()
+			TweenService:Create(Row, TweenFast, { BackgroundColor3 = Color3.fromRGB(32,30,24) }):Play()
+			Row.BackgroundTransparency = 0
+		end)
+		Row.MouseLeave:Connect(function()
+			TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
+			task.delay(0.14, function() Row.BackgroundTransparency = 1 end)
+		end)
+	end
+
+	refresh()
+
+	return {
+		Frame    = Card,
+		SetValue = function(i) current = i; refresh() end,
+		GetValue = function() return current, items[current] end,
+	}
+end
+
+-- ============================================================
+-- CreateDropdown
+-- A collapsible labeled select list (single or multi-select).
+--
+-- Options:
+--   Label        string
+--   Options      table     Array of option strings
+--   Default      any       Selected value/index (or array of values if Multi)
+--   Multi        bool      Allow multiple selections   (default false)
+--   Placeholder  string    Shown when nothing is selected
+--   OnChanged    function(value)   -- value is a string, or an array if Multi
+--
+-- Returns: { Frame, SetOpen(bool), GetValue() }
+-- ============================================================
+function UILib.CreateDropdown(Parent, Options)
+	Options = Options or {}
+	local items = Options.Options or {}
+	local multi = Options.Multi == true
+	local selected = {}
+
+	if multi then
+		for _, val in ipairs(Options.Default or {}) do selected[val] = true end
+	else
+		local d = Options.Default
+		if type(d) == "number" then d = items[d] end
+		if d ~= nil then selected[d] = true end
+	end
+
+	local Card = Instance.new("Frame")
+	Card.Size              = UDim2.new(1, 0, 0, 0)
+	Card.AutomaticSize     = Enum.AutomaticSize.Y
+	Card.BackgroundColor3  = Theme.Bg2
+	Card.BorderSizePixel   = 0
+	Card.Parent            = Parent
+	MakeCorner(Card, UDim.new(0, 7))
+	MakeStroke(Card, Theme.AccentDim, 1)
+	local CardLayout = Instance.new("UIListLayout", Card)
+	CardLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	CardLayout.Padding   = UDim.new(0, 0)
+
+	local Head = Instance.new("TextButton", Card)
+	Head.Size                   = UDim2.new(1, 0, 0, 34)
+	Head.LayoutOrder            = 0
+	Head.BackgroundTransparency = 1
+	Head.AutoButtonColor        = false
+	Head.Text                   = ""
+
+	local hasLabel = Options.Label and Options.Label ~= ""
+	if hasLabel then
+		local Lbl = Instance.new("TextLabel", Head)
+		Lbl.Size                   = UDim2.new(0.45, 0, 1, 0)
+		Lbl.Position               = UDim2.new(0, 12, 0, 0)
+		Lbl.BackgroundTransparency = 1
+		Lbl.Font                   = Theme.FontRegular
+		Lbl.TextSize               = Theme.BodySize
+		Lbl.TextColor3             = Theme.TextPrimary
+		Lbl.TextXAlignment         = Enum.TextXAlignment.Left
+		Lbl.Text                   = Options.Label
+	end
+
+	local ValueLbl = Instance.new("TextLabel", Head)
+	ValueLbl.Size                   = hasLabel and UDim2.new(0.55, -28, 1, 0) or UDim2.new(1, -40, 1, 0)
+	ValueLbl.Position               = hasLabel and UDim2.new(0.45, 0, 0, 0) or UDim2.new(0, 12, 0, 0)
+	ValueLbl.BackgroundTransparency = 1
+	ValueLbl.Font                   = Theme.FontMedium
+	ValueLbl.TextSize               = Theme.SmallSize
+	ValueLbl.TextColor3             = Theme.AccentSec
+	ValueLbl.TextXAlignment         = Enum.TextXAlignment.Right
+	ValueLbl.TextTruncate           = Enum.TextTruncate.AtEnd
+
+	local Chevron = Instance.new("TextLabel", Head)
+	Chevron.Size                   = UDim2.new(0, 20, 1, 0)
+	Chevron.Position               = UDim2.new(1, -24, 0, 0)
+	Chevron.BackgroundTransparency = 1
+	Chevron.Font                   = Theme.FontIcon
+	Chevron.TextSize               = 12
+	Chevron.TextColor3             = Theme.AccentDim
+	Chevron.Text                   = "▾"
+
+	local List = Instance.new("Frame", Card)
+	List.Size                   = UDim2.new(1, 0, 0, 0)
+	List.AutomaticSize          = Enum.AutomaticSize.Y
+	List.LayoutOrder            = 1
+	List.BackgroundTransparency = 1
+	List.Visible                = false
+	MakePadding(List, 6, 6, 0, 6)
+	MakeListLayout(List, Enum.FillDirection.Vertical, 3)
+
+	local Div = Instance.new("Frame", List)
+	Div.Size                   = UDim2.new(1, 0, 0, 1)
+	Div.LayoutOrder            = 0
+	Div.BackgroundColor3       = Theme.AccentDim
+	Div.BackgroundTransparency = 0.4
+	Div.BorderSizePixel        = 0
+
+	local optRows = {}
+
+	local function refreshLabel()
+		local out = {}
+		for _, val in ipairs(items) do
+			if selected[val] then table.insert(out, val) end
+		end
+		ValueLbl.Text = (#out > 0) and table.concat(out, ", ") or (Options.Placeholder or "Select...")
+	end
+
+	local function refreshRows()
+		for val, row in pairs(optRows) do
+			local on = selected[val] == true
+			row.Check.TextTransparency = on and 0 or 1
+			row.Lbl.TextColor3 = on and Theme.ActiveTabText or Theme.TextPrimary
+		end
+	end
+
+	local isOpen = false
+	local function setOpen(open)
+		isOpen = open
+		List.Visible = open
+		Chevron.Text = open and "▴" or "▾"
+	end
+
+	for i, text in ipairs(items) do
+		local Row = Instance.new("TextButton", List)
+		Row.Size                   = UDim2.new(1, 0, 0, 26)
+		Row.LayoutOrder            = i
+		Row.BackgroundColor3       = Theme.Bg2
+		Row.BackgroundTransparency = 1
+		Row.AutoButtonColor        = false
+		Row.Text                   = ""
+		MakeCorner(Row, UDim.new(0, 5))
+
+		local Check = Instance.new("TextLabel", Row)
+		Check.Size                   = UDim2.new(0, 18, 1, 0)
+		Check.Position               = UDim2.new(0, 4, 0, 0)
+		Check.BackgroundTransparency = 1
+		Check.Font                   = Theme.FontIcon
+		Check.TextSize               = 12
+		Check.TextColor3             = Theme.Accent
+		Check.Text                   = "✓"
+		Check.TextTransparency       = selected[text] and 0 or 1
+
+		local RLbl = Instance.new("TextLabel", Row)
+		RLbl.Size                   = UDim2.new(1, -28, 1, 0)
+		RLbl.Position               = UDim2.new(0, 24, 0, 0)
+		RLbl.BackgroundTransparency = 1
+		RLbl.Font                   = Theme.FontRegular
+		RLbl.TextSize               = Theme.SmallSize + 1
+		RLbl.TextColor3             = selected[text] and Theme.ActiveTabText or Theme.TextPrimary
+		RLbl.TextXAlignment         = Enum.TextXAlignment.Left
+		RLbl.Text                   = text
+
+		optRows[text] = { Check = Check, Lbl = RLbl }
+
+		Row.MouseButton1Click:Connect(function()
+			if multi then
+				if selected[text] then selected[text] = nil else selected[text] = true end
+			else
+				selected = {}
+				selected[text] = true
+			end
+			refreshRows()
+			refreshLabel()
+			if Options.OnChanged then
+				if multi then
+					local out = {}
+					for _, val in ipairs(items) do if selected[val] then table.insert(out, val) end end
+					Options.OnChanged(out)
+				else
+					Options.OnChanged(text)
+				end
+			end
+			if not multi then setOpen(false) end
+		end)
+		Row.MouseEnter:Connect(function()
+			TweenService:Create(Row, TweenFast, { BackgroundColor3 = Color3.fromRGB(32,30,24) }):Play()
+			Row.BackgroundTransparency = 0
+		end)
+		Row.MouseLeave:Connect(function()
+			TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
+			task.delay(0.14, function() Row.BackgroundTransparency = 1 end)
+		end)
+	end
+
+	refreshLabel()
+
+	Head.MouseButton1Click:Connect(function()
+		setOpen(not isOpen)
+	end)
+	Head.MouseEnter:Connect(function()
+		TweenService:Create(Head, TweenFast, { BackgroundColor3 = Color3.fromRGB(32,30,24) }):Play()
+		Head.BackgroundTransparency = 0
+	end)
+	Head.MouseLeave:Connect(function()
+		TweenService:Create(Head, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
+		task.delay(0.14, function() Head.BackgroundTransparency = 1 end)
+	end)
+
+	return {
+		Frame    = Card,
+		SetOpen  = setOpen,
+		GetValue = function()
+			if multi then
+				local out = {}
+				for _, val in ipairs(items) do if selected[val] then table.insert(out, val) end end
+				return out
+			end
+			for _, val in ipairs(items) do if selected[val] then return val end end
+			return nil
+		end,
+	}
+end
+
+-- ============================================================
+-- CreateKeybind
+-- A labeled row with a capture button; click it, then press a
+-- key to bind it.
+--
+-- Options:
+--   Label      string
+--   Default    Enum.KeyCode | string   (e.g. Enum.KeyCode.E or "E")
+--   OnChanged  function(keyCode)
+--
+-- Returns: { Frame, Set(keyCode), GetValue() }
+-- ============================================================
+function UILib.CreateKeybind(Parent, Options)
+	Options = Options or {}
+	local current = Options.Default
+	if type(current) == "string" then
+		current = Enum.KeyCode[current]
+	end
+
+	local Row = Instance.new("Frame")
+	Row.Size             = UDim2.new(1, 0, 0, 34)
+	Row.BackgroundColor3 = Theme.Bg2
+	Row.BorderSizePixel  = 0
+	Row.Parent           = Parent
+	MakeCorner(Row, UDim.new(0, 7))
+	MakeStroke(Row, Theme.AccentDim, 1)
+
+	local Lbl = Instance.new("TextLabel", Row)
+	Lbl.Size                   = UDim2.new(1, -90, 1, 0)
+	Lbl.Position               = UDim2.new(0, 12, 0, 0)
+	Lbl.BackgroundTransparency = 1
+	Lbl.Font                   = Theme.FontRegular
+	Lbl.TextSize               = Theme.BodySize
+	Lbl.TextColor3             = Theme.TextPrimary
+	Lbl.TextXAlignment         = Enum.TextXAlignment.Left
+	Lbl.Text                   = Options.Label or ""
+
+	local KeyBtn = Instance.new("TextButton", Row)
+	KeyBtn.AnchorPoint            = Vector2.new(1, 0.5)
+	KeyBtn.Position               = UDim2.new(1, -10, 0.5, 0)
+	KeyBtn.Size                   = UDim2.new(0, 74, 0, Theme.ToggleH + 2)
+	KeyBtn.BackgroundColor3       = Theme.InputBg
+	KeyBtn.BorderSizePixel        = 0
+	KeyBtn.Font                   = Theme.FontMedium
+	KeyBtn.TextSize               = Theme.SmallSize
+	KeyBtn.TextColor3             = Theme.AccentSec
+	KeyBtn.AutoButtonColor        = false
+	KeyBtn.Text                   = current and current.Name or "None"
+	MakeCorner(KeyBtn, UDim.new(0, 5))
+	local keyStroke = MakeStroke(KeyBtn, Theme.AccentDim, 1)
+
+	local listening = false
+	local conn
+
+	local function stopListening()
+		listening = false
+		TweenService:Create(keyStroke, TweenFast, { Color = Theme.AccentDim }):Play()
+		if conn then conn:Disconnect(); conn = nil end
+	end
+
+	KeyBtn.MouseButton1Click:Connect(function()
+		if listening then stopListening(); return end
+		listening = true
+		KeyBtn.Text = "..."
+		TweenService:Create(keyStroke, TweenFast, { Color = Theme.Accent }):Play()
+		conn = UserInputService.InputBegan:Connect(function(inp)
+			if inp.UserInputType == Enum.UserInputType.Keyboard then
+				current = inp.KeyCode
+				KeyBtn.Text = current.Name
+				stopListening()
+				if Options.OnChanged then Options.OnChanged(current) end
+			end
+		end)
+	end)
+
+	Row.MouseEnter:Connect(function()
+		TweenService:Create(Row, TweenFast, { BackgroundColor3 = Color3.fromRGB(32,30,24) }):Play()
+	end)
+	Row.MouseLeave:Connect(function()
+		TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
+	end)
+
+	return {
+		Frame = Row,
+		Set = function(kc)
+			current = kc
+			KeyBtn.Text = kc and kc.Name or "None"
+		end,
+		GetValue = function() return current end,
+	}
+end
+
+-- ============================================================
+-- CreateCode
+-- A monospace code block with an optional language tag and
+-- copy-to-clipboard button.
+--
+-- Options:
+--   Text       string   The code contents
+--   Language   string   Optional language label (e.g. "lua")
+--   Height     number   Fixed scrollable height (default: auto-fit)
+--
+-- Returns: { Frame, SetText(text) }
+-- ============================================================
+function UILib.CreateCode(Parent, Options)
+	Options = Options or {}
+	local fixedH = Options.Height
+
+	local hasHeader = Options.Language and Options.Language ~= ""
+
+	local Card = Instance.new("Frame")
+	Card.Size              = UDim2.new(1, 0, 0, fixedH and (fixedH + (hasHeader and 22 or 0)) or 0)
+	Card.AutomaticSize     = fixedH and Enum.AutomaticSize.None or Enum.AutomaticSize.Y
+	Card.BackgroundColor3  = Theme.Bg3
+	Card.BorderSizePixel   = 0
+	Card.ClipsDescendants  = true
+	Card.Parent            = Parent
+	MakeCorner(Card, UDim.new(0, 7))
+	MakeStroke(Card, Theme.AccentDim, 1)
+	local CardLayout = Instance.new("UIListLayout", Card)
+	CardLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	CardLayout.Padding   = UDim.new(0, 0)
+	if hasHeader then
+		local HeaderRow = Instance.new("Frame", Card)
+		HeaderRow.Size             = UDim2.new(1, 0, 0, 22)
+		HeaderRow.LayoutOrder      = 0
+		HeaderRow.BackgroundColor3 = Theme.Bg2
+		HeaderRow.BorderSizePixel  = 0
+
+		local LangLbl = Instance.new("TextLabel", HeaderRow)
+		LangLbl.Size                   = UDim2.new(1, -54, 1, 0)
+		LangLbl.Position               = UDim2.new(0, 10, 0, 0)
+		LangLbl.BackgroundTransparency = 1
+		LangLbl.Font                   = Theme.FontMedium
+		LangLbl.TextSize               = Theme.CaptionSize
+		LangLbl.TextColor3             = Theme.TextMuted
+		LangLbl.TextXAlignment         = Enum.TextXAlignment.Left
+		LangLbl.Text                   = string.upper(Options.Language)
+
+		local CopyBtn = Instance.new("TextButton", HeaderRow)
+		CopyBtn.Size                   = UDim2.new(0, 44, 1, -6)
+		CopyBtn.Position               = UDim2.new(1, -48, 0, 3)
+		CopyBtn.BackgroundColor3       = Theme.Bg3
+		CopyBtn.BorderSizePixel        = 0
+		CopyBtn.Font                   = Theme.FontMedium
+		CopyBtn.TextSize               = 10
+		CopyBtn.TextColor3             = Theme.TextMuted
+		CopyBtn.Text                   = "Copy"
+		CopyBtn.AutoButtonColor        = false
+		MakeCorner(CopyBtn, UDim.new(0, 4))
+
+		CopyBtn.MouseButton1Click:Connect(function()
+			if setclipboard then
+				pcall(setclipboard, Options.Text or "")
+				CopyBtn.Text = "Copied"
+				task.delay(1, function() CopyBtn.Text = "Copy" end)
+			end
+		end)
+	end
+
+	local Scroll = Instance.new("ScrollingFrame", Card)
+	Scroll.LayoutOrder            = 1
+	Scroll.BackgroundTransparency = 1
+	Scroll.BorderSizePixel        = 0
+	Scroll.ScrollBarThickness     = 3
+	Scroll.ScrollBarImageColor3   = Theme.AccentDim
+	Scroll.CanvasSize             = UDim2.new(0, 0, 0, 0)
+	Scroll.ClipsDescendants       = true
+	if fixedH then
+		Scroll.Size                = UDim2.new(1, 0, 0, fixedH)
+		Scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	else
+		Scroll.Size                = UDim2.new(1, 0, 0, 0)
+		Scroll.AutomaticSize       = Enum.AutomaticSize.Y
+		Scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	end
+	MakePadding(Scroll, 10, 10, 8, 8)
+
+	local CodeLbl = Instance.new("TextLabel", Scroll)
+	CodeLbl.Size                   = UDim2.new(1, -20, 0, 0)
+	CodeLbl.AutomaticSize          = Enum.AutomaticSize.Y
+	CodeLbl.BackgroundTransparency = 1
+	CodeLbl.Font                   = Enum.Font.Code
+	CodeLbl.TextSize               = Theme.SmallSize
+	CodeLbl.TextColor3             = Theme.TextPrimary
+	CodeLbl.TextXAlignment         = Enum.TextXAlignment.Left
+	CodeLbl.TextYAlignment         = Enum.TextYAlignment.Top
+	CodeLbl.TextWrapped            = true
+	CodeLbl.Text                   = Options.Text or ""
+
+	return {
+		Frame   = Card,
+		SetText = function(t) CodeLbl.Text = t end,
+	}
+end
+
+-- ============================================================
+-- CreateImage
+-- A bordered image display.
+--
+-- Options:
+--   Image       string          Asset id, e.g. "rbxassetid://123..."
+--   Height      number          (default 150)
+--   ScaleType   Enum.ScaleType  (default Fit)
+--
+-- Returns: { Frame, Image, SetImage(id) }
+-- ============================================================
+function UILib.CreateImage(Parent, Options)
+	Options = Options or {}
+	local h = Options.Height or 150
+
+	local Card = Instance.new("Frame")
+	Card.Size              = UDim2.new(1, 0, 0, h)
+	Card.BackgroundColor3  = Theme.Bg3
+	Card.BorderSizePixel   = 0
+	Card.ClipsDescendants  = true
+	Card.Parent            = Parent
+	MakeCorner(Card, UDim.new(0, 7))
+	MakeStroke(Card, Theme.AccentDim, 1)
+
+	local Img = Instance.new("ImageLabel", Card)
+	Img.Size                   = UDim2.new(1, 0, 1, 0)
+	Img.BackgroundTransparency = 1
+	Img.Image                  = Options.Image or ""
+	Img.ScaleType               = Options.ScaleType or Enum.ScaleType.Fit
+
+	return {
+		Frame    = Card,
+		Image    = Img,
+		SetImage = function(id) Img.Image = id end,
+	}
+end
+
+-- ============================================================
+-- CreateVideo
+-- A bordered video player with a play/pause control.
+--
+-- Options:
+--   Video      string   Asset id, e.g. "rbxassetid://123..."
+--   Height     number   (default 180)
+--   Looped     bool     (default false)
+--   Volume     number   (default 1)
+--   Autoplay   bool     (default false)
+--
+-- Returns: { Frame, Video, Play(), Pause() }
+-- ============================================================
+function UILib.CreateVideo(Parent, Options)
+	Options = Options or {}
+	local h = Options.Height or 180
+
+	local Card = Instance.new("Frame")
+	Card.Size              = UDim2.new(1, 0, 0, h + 30)
+	Card.BackgroundColor3  = Theme.Bg3
+	Card.BorderSizePixel   = 0
+	Card.ClipsDescendants  = true
+	Card.Parent            = Parent
+	MakeCorner(Card, UDim.new(0, 7))
+	MakeStroke(Card, Theme.AccentDim, 1)
+
+	local Vid = Instance.new("VideoFrame", Card)
+	Vid.Size             = UDim2.new(1, 0, 0, h)
+	Vid.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+	Vid.BorderSizePixel  = 0
+	Vid.Video            = Options.Video or ""
+	Vid.Looped           = Options.Looped == true
+	Vid.Volume           = Options.Volume or 1
+
+	local Controls = Instance.new("Frame", Card)
+	Controls.Position               = UDim2.new(0, 0, 0, h)
+	Controls.Size                   = UDim2.new(1, 0, 0, 30)
+	Controls.BackgroundTransparency = 1
+
+	local PlayBtn = Instance.new("TextButton", Controls)
+	PlayBtn.Size             = UDim2.new(0, 60, 0, 22)
+	PlayBtn.Position         = UDim2.new(0, 8, 0.5, -11)
+	PlayBtn.BackgroundColor3 = Theme.Bg2
+	PlayBtn.BorderSizePixel  = 0
+	PlayBtn.Font             = Theme.FontMedium
+	PlayBtn.TextSize         = Theme.SmallSize
+	PlayBtn.TextColor3       = Theme.TextPrimary
+	PlayBtn.Text             = "Play"
+	PlayBtn.AutoButtonColor  = false
+	MakeCorner(PlayBtn, UDim.new(0, 5))
+	MakeStroke(PlayBtn, Theme.AccentDim, 1)
+
+	local function updateBtn()
+		PlayBtn.Text = Vid.IsPlaying and "Pause" or "Play"
+	end
+
+	local function Play() Vid:Play(); updateBtn() end
+	local function Pause() Vid:Pause(); updateBtn() end
+
+	PlayBtn.MouseButton1Click:Connect(function()
+		if Vid.IsPlaying then Pause() else Play() end
+	end)
+
+	if Options.Autoplay then Play() else updateBtn() end
+
+	return { Frame = Card, Video = Vid, Play = Play, Pause = Pause }
+end
+
+-- ============================================================
+-- CreateViewport
+-- A ViewportFrame for previewing a 3D model, with optional
+-- auto-rotate.
+--
+-- Options:
+--   Model        Instance   A Model/BasePart to clone into the viewport
+--   Height       number     (default 180)
+--   AutoRotate   bool       (default false)
+--
+-- Returns: { Frame, Viewport, Camera, SetModel(instance) }
+-- ============================================================
+function UILib.CreateViewport(Parent, Options)
+	Options = Options or {}
+	local h = Options.Height or 180
+
+	local Card = Instance.new("Frame")
+	Card.Size              = UDim2.new(1, 0, 0, h)
+	Card.BackgroundColor3  = Options.BackgroundColor3 or Theme.Bg3
+	Card.BorderSizePixel   = 0
+	Card.ClipsDescendants  = true
+	Card.Parent            = Parent
+	MakeCorner(Card, UDim.new(0, 7))
+	MakeStroke(Card, Theme.AccentDim, 1)
+
+	local VP = Instance.new("ViewportFrame", Card)
+	VP.Size                   = UDim2.new(1, 0, 1, 0)
+	VP.BackgroundTransparency = 1
+
+	local Cam = Instance.new("Camera", VP)
+	VP.CurrentCamera = Cam
+
+	local modelClone
+	local rotConn
+
+	local function frameCamera(target)
+		local cf, size = target:GetBoundingBox()
+		local dist = math.max(size.Magnitude, 4)
+		Cam.CFrame = CFrame.new(cf.Position + Vector3.new(0, size.Y * 0.2, dist), cf.Position)
+	end
+
+	local function SetModel(model)
+		if modelClone then modelClone:Destroy() end
+		if rotConn then rotConn:Disconnect(); rotConn = nil end
+		if not model then return end
+		modelClone = model:Clone()
+		modelClone.Parent = VP
+		task.defer(function()
+			local ok = pcall(frameCamera, modelClone)
+			if not ok then
+				Cam.CFrame = CFrame.new(Vector3.new(0, 0, 10), Vector3.new(0, 0, 0))
+			end
+			if Options.AutoRotate then
+				local angle = 0
+				rotConn = RunService.RenderStepped:Connect(function(dt)
+					angle = angle + dt * 0.5
+					local ok2, cf2, size2 = pcall(function() return modelClone:GetBoundingBox() end)
+					if ok2 then
+						local dist2 = math.max(size2.Magnitude, 4)
+						Cam.CFrame = CFrame.new(
+							cf2.Position + Vector3.new(math.sin(angle) * dist2, size2.Y * 0.2, math.cos(angle) * dist2),
+							cf2.Position)
+					end
+				end)
+			end
+		end)
+	end
+
+	if Options.Model then SetModel(Options.Model) end
+
+	return { Frame = Card, Viewport = VP, Camera = Cam, SetModel = SetModel }
+end
+
+-- ============================================================
+-- CreateColorPicker
+-- A labeled swatch that expands into a saturation/value box,
+-- a hue slider, and a hex input.
+--
+-- Options:
+--   Label      string
+--   Default    Color3    (default white)
+--   OnChanged  function(color3)
+--
+-- Returns: { Frame, SetOpen(bool), SetValue(color3), GetValue() }
+-- ============================================================
+function UILib.CreateColorPicker(Parent, Options)
+	Options = Options or {}
+	local current = Options.Default or Color3.fromRGB(255, 255, 255)
+	local h, s, v = Color3.toHSV(current)
+
+	local Card = Instance.new("Frame")
+	Card.Size              = UDim2.new(1, 0, 0, 0)
+	Card.AutomaticSize     = Enum.AutomaticSize.Y
+	Card.BackgroundColor3  = Theme.Bg2
+	Card.BorderSizePixel   = 0
+	Card.Parent            = Parent
+	MakeCorner(Card, UDim.new(0, 7))
+	MakeStroke(Card, Theme.AccentDim, 1)
+	local CardLayout = Instance.new("UIListLayout", Card)
+	CardLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	CardLayout.Padding   = UDim.new(0, 0)
+
+	local Head = Instance.new("TextButton", Card)
+	Head.Size                   = UDim2.new(1, 0, 0, 34)
+	Head.LayoutOrder            = 0
+	Head.BackgroundTransparency = 1
+	Head.AutoButtonColor        = false
+	Head.Text                   = ""
+
+	local Lbl = Instance.new("TextLabel", Head)
+	Lbl.Size                   = UDim2.new(1, -60, 1, 0)
+	Lbl.Position               = UDim2.new(0, 12, 0, 0)
+	Lbl.BackgroundTransparency = 1
+	Lbl.Font                   = Theme.FontRegular
+	Lbl.TextSize               = Theme.BodySize
+	Lbl.TextColor3             = Theme.TextPrimary
+	Lbl.TextXAlignment         = Enum.TextXAlignment.Left
+	Lbl.Text                   = Options.Label or ""
+
+	local Swatch = Instance.new("Frame", Head)
+	Swatch.AnchorPoint      = Vector2.new(1, 0.5)
+	Swatch.Position         = UDim2.new(1, -10, 0.5, 0)
+	Swatch.Size             = UDim2.new(0, 36, 0, 20)
+	Swatch.BackgroundColor3 = current
+	Swatch.BorderSizePixel  = 0
+	MakeCorner(Swatch, UDim.new(0, 5))
+	MakeStroke(Swatch, Theme.AccentDim, 1)
+
+	local Panel = Instance.new("Frame", Card)
+	Panel.Size                   = UDim2.new(1, 0, 0, 0)
+	Panel.AutomaticSize          = Enum.AutomaticSize.Y
+	Panel.LayoutOrder            = 1
+	Panel.BackgroundTransparency = 1
+	Panel.Visible                = false
+	MakePadding(Panel, 10, 10, 4, 10)
+	MakeListLayout(Panel, Enum.FillDirection.Vertical, 8)
+
+	local SVBox = Instance.new("Frame", Panel)
+	SVBox.Size              = UDim2.new(1, 0, 0, 90)
+	SVBox.LayoutOrder        = 0
+	SVBox.BackgroundColor3  = Color3.fromHSV(h, 1, 1)
+	SVBox.BorderSizePixel   = 0
+	SVBox.ClipsDescendants  = true
+	MakeCorner(SVBox, UDim.new(0, 5))
+
+	local SatOverlay = Instance.new("Frame", SVBox)
+	SatOverlay.Size             = UDim2.new(1, 0, 1, 0)
+	SatOverlay.BackgroundColor3 = Color3.new(1, 1, 1)
+	SatOverlay.BorderSizePixel  = 0
+	local satGrad = Instance.new("UIGradient", SatOverlay)
+	satGrad.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+
+	local ValOverlay = Instance.new("Frame", SVBox)
+	ValOverlay.Size             = UDim2.new(1, 0, 1, 0)
+	ValOverlay.BackgroundColor3 = Color3.new(0, 0, 0)
+	ValOverlay.BorderSizePixel  = 0
+	local valGrad = Instance.new("UIGradient", ValOverlay)
+	valGrad.Rotation = 90
+	valGrad.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(1, 0),
+	})
+
+	local SVCursor = Instance.new("Frame", SVBox)
+	SVCursor.Size             = UDim2.new(0, 10, 0, 10)
+	SVCursor.AnchorPoint      = Vector2.new(0.5, 0.5)
+	SVCursor.BackgroundColor3 = Color3.new(1, 1, 1)
+	SVCursor.BorderSizePixel  = 0
+	SVCursor.ZIndex           = 2
+	MakeCorner(SVCursor, UDim.new(1, 0))
+	MakeStroke(SVCursor, Color3.new(0, 0, 0), 1.5)
+
+	local HueTrack = Instance.new("Frame", Panel)
+	HueTrack.Size            = UDim2.new(1, 0, 0, 14)
+	HueTrack.LayoutOrder     = 1
+	HueTrack.BorderSizePixel = 0
+	MakeCorner(HueTrack, UDim.new(1, 0))
+	local hueGrad = Instance.new("UIGradient", HueTrack)
+	hueGrad.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0.000, Color3.fromHSV(0 / 6, 1, 1)),
+		ColorSequenceKeypoint.new(0.166, Color3.fromHSV(1 / 6, 1, 1)),
+		ColorSequenceKeypoint.new(0.333, Color3.fromHSV(2 / 6, 1, 1)),
+		ColorSequenceKeypoint.new(0.500, Color3.fromHSV(3 / 6, 1, 1)),
+		ColorSequenceKeypoint.new(0.666, Color3.fromHSV(4 / 6, 1, 1)),
+		ColorSequenceKeypoint.new(0.833, Color3.fromHSV(5 / 6, 1, 1)),
+		ColorSequenceKeypoint.new(1.000, Color3.fromHSV(6 / 6, 1, 1)),
+	})
+
+	local HueCursor = Instance.new("Frame", HueTrack)
+	HueCursor.Size             = UDim2.new(0, 4, 1, 4)
+	HueCursor.AnchorPoint      = Vector2.new(0.5, 0.5)
+	HueCursor.Position         = UDim2.new(h, 0, 0.5, 0)
+	HueCursor.BackgroundColor3 = Color3.new(1, 1, 1)
+	HueCursor.BorderSizePixel  = 0
+	MakeCorner(HueCursor, UDim.new(0, 2))
+	MakeStroke(HueCursor, Color3.new(0, 0, 0), 1)
+
+	local HexBox = Instance.new("TextBox", Panel)
+	HexBox.Size              = UDim2.new(1, 0, 0, 24)
+	HexBox.LayoutOrder       = 2
+	HexBox.BackgroundColor3  = Theme.InputBg
+	HexBox.BorderSizePixel   = 0
+	HexBox.Font              = Theme.FontMedium
+	HexBox.TextSize          = Theme.SmallSize
+	HexBox.TextColor3        = Theme.AccentSec
+	HexBox.ClearTextOnFocus  = false
+	MakeCorner(HexBox, UDim.new(0, 5))
+	MakeStroke(HexBox, Theme.AccentDim, 1)
+
+	local function updateFromHSV(fireEvent)
+		current = Color3.fromHSV(h, s, v)
+		Swatch.BackgroundColor3 = current
+		SVBox.BackgroundColor3  = Color3.fromHSV(h, 1, 1)
+		SVCursor.Position       = UDim2.new(s, 0, 1 - v, 0)
+		HueCursor.Position      = UDim2.new(h, 0, 0.5, 0)
+		HexBox.Text             = string.format("#%02X%02X%02X",
+			math.floor(current.R * 255 + 0.5),
+			math.floor(current.G * 255 + 0.5),
+			math.floor(current.B * 255 + 0.5))
+		if fireEvent and Options.OnChanged then Options.OnChanged(current) end
+	end
+	updateFromHSV(false)
+
+	local draggingSV, draggingHue = false, false
+
+	local function jumpSV(pos)
+		local rel = Vector2.new(
+			(pos.X - SVBox.AbsolutePosition.X) / SVBox.AbsoluteSize.X,
+			(pos.Y - SVBox.AbsolutePosition.Y) / SVBox.AbsoluteSize.Y)
+		s = math.clamp(rel.X, 0, 1)
+		v = 1 - math.clamp(rel.Y, 0, 1)
+		updateFromHSV(true)
+	end
+	local function jumpHue(pos)
+		local rel = (pos.X - HueTrack.AbsolutePosition.X) / HueTrack.AbsoluteSize.X
+		h = math.clamp(rel, 0, 1)
+		updateFromHSV(true)
+	end
+
+	SVBox.InputBegan:Connect(function(inp)
+		if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
+			draggingSV = true
+			jumpSV(inp.Position)
+		end
+	end)
+	HueTrack.InputBegan:Connect(function(inp)
+		if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
+			draggingHue = true
+			jumpHue(inp.Position)
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(inp)
+		if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
+			draggingSV, draggingHue = false, false
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(inp)
+		if inp.UserInputType ~= Enum.UserInputType.MouseMovement and inp.UserInputType ~= Enum.UserInputType.Touch then return end
+		if draggingSV then jumpSV(inp.Position)
+		elseif draggingHue then jumpHue(inp.Position) end
+	end)
+
+	HexBox.FocusLost:Connect(function()
+		local hex = string.gsub(HexBox.Text, "#", "")
+		if #hex == 6 and string.match(hex, "^%x+$") then
+			local r = tonumber(string.sub(hex, 1, 2), 16) / 255
+			local g = tonumber(string.sub(hex, 3, 4), 16) / 255
+			local b = tonumber(string.sub(hex, 5, 6), 16) / 255
+			h, s, v = Color3.toHSV(Color3.new(r, g, b))
+			updateFromHSV(true)
+		else
+			updateFromHSV(false)
+		end
+	end)
+
+	local isOpen = false
+	local function setOpen(open)
+		isOpen = open
+		Panel.Visible = open
+	end
+
+	Head.MouseButton1Click:Connect(function()
+		setOpen(not isOpen)
+	end)
+	Head.MouseEnter:Connect(function()
+		TweenService:Create(Head, TweenFast, { BackgroundColor3 = Color3.fromRGB(32, 30, 24) }):Play()
+		Head.BackgroundTransparency = 0
+	end)
+	Head.MouseLeave:Connect(function()
+		TweenService:Create(Head, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
+		task.delay(0.14, function() Head.BackgroundTransparency = 1 end)
+	end)
+
+	return {
+		Frame    = Card,
+		SetOpen  = setOpen,
+		SetValue = function(c)
+			h, s, v = Color3.toHSV(c)
+			updateFromHSV(false)
+		end,
+		GetValue = function() return current end,
+	}
+end
+
+-- ============================================================
+-- Init
+-- Optional bootstrap call. Lets you override theme values and
+-- set a default Parent for future CreatePanel calls in one go,
+-- without having to reach into UILib.Theme directly.
+--
+-- Options:
+--   Theme    table      Partial theme override, merged into UILib.Theme
+--   Parent   Instance   Default parent for new panels (default PlayerGui)
+--
+-- Returns: UILib (so calls can be chained, e.g.
+--   UILib.Init({ Theme = { Accent = Color3.fromRGB(120,80,220) } }).CreatePanel({...})
+-- ============================================================
+function UILib.Init(Options)
+	Options = Options or {}
+	if Options.Theme then
+		for k, val in pairs(Options.Theme) do
+			Theme[k] = val
+		end
+	end
+	if Options.Parent then
+		DefaultParent = Options.Parent
+	end
+	return UILib
+end
+
+-- ============================================================
+-- Convenience lowercase aliases
+-- Exposes each component under a short name in addition to the
+-- primary CreateXxx API, without altering how the components
+-- themselves are implemented.
+-- ============================================================
+UILib.init        = UILib.Init
+UILib.button      = UILib.CreateButton
+UILib.code        = UILib.CreateCode
+UILib.colorpicker = UILib.CreateColorPicker
+UILib.divider     = UILib.CreateDivider
+UILib.dropdown    = UILib.CreateDropdown
+UILib.group       = UILib.CreateGroup
+UILib.hstack      = UILib.CreateHStack
+UILib.image       = UILib.CreateImage
+UILib.input       = UILib.CreateTextInput
+UILib.keybind     = UILib.CreateKeybind
+UILib.paragraph   = UILib.CreateParagraph
+UILib.progressbar = UILib.CreateProgressBar
+UILib.section     = UILib.CreateSection
+UILib.slider      = UILib.CreateSlider
+UILib.space       = UILib.CreateSpace
+UILib.toggle      = UILib.CreateToggle
+UILib.vstack      = UILib.CreateVStack
+UILib.video       = UILib.CreateVideo
+UILib.viewport    = UILib.CreateViewport
+
 
 return UILib
