@@ -2688,12 +2688,26 @@ function UILib.CreateCardList(Parent, Options)
 		MakeCorner(Card, UDim.new(0, 6))
 		local stroke = MakeStroke(Card, Theme.AccentDim, 1)
 		MakePadding(Card, 10, 10, 8, 9)
-		MakeListLayout(Card, Enum.FillDirection.Vertical, 3)
+
+		-- When CardHeight is fixed we can't use UIListLayout on the card
+		-- (it has no way to stretch DescLbl into remaining space).
+		-- Instead: TitleRow sits at the top with a fixed height; DescLbl
+		-- is positioned below it and fills the rest of the card.
+		local TITLE_ROW_H = 20
+
+		if not cardH then
+			MakeListLayout(Card, Enum.FillDirection.Vertical, 3)
+		end
 
 		-- Row: selection ring/dot + title
 		local TitleRow = Instance.new("Frame", Card)
-		TitleRow.Size                   = UDim2.new(1, 0, 0, 0)
-		TitleRow.AutomaticSize          = Enum.AutomaticSize.Y
+		if cardH then
+			TitleRow.Size     = UDim2.new(1, 0, 0, TITLE_ROW_H)
+			TitleRow.Position = UDim2.new(0, 0, 0, 0)
+		else
+			TitleRow.Size          = UDim2.new(1, 0, 0, 0)
+			TitleRow.AutomaticSize = Enum.AutomaticSize.Y
+		end
 		TitleRow.BackgroundTransparency = 1
 		TitleRow.LayoutOrder            = 0
 		MakeListLayout(TitleRow, Enum.FillDirection.Horizontal, 8,
@@ -2730,13 +2744,23 @@ function UILib.CreateCardList(Parent, Options)
 
 		-- Description line
 		local DescLbl = Instance.new("TextLabel", Card)
-		DescLbl.Size                   = UDim2.new(1, 0, 0, 0)
-		DescLbl.AutomaticSize          = Enum.AutomaticSize.Y
+		if cardH then
+			-- Position below TitleRow, fill remaining card height
+			local pad = 8 + 9   -- top + bottom padding from MakePadding
+			local gap = 3
+			DescLbl.Position      = UDim2.new(0, 0, 0, TITLE_ROW_H + gap)
+			DescLbl.Size          = UDim2.new(1, 0, 0, cardH - pad - TITLE_ROW_H - gap)
+			DescLbl.AutomaticSize = Enum.AutomaticSize.None
+		else
+			DescLbl.Size          = UDim2.new(1, 0, 0, 0)
+			DescLbl.AutomaticSize = Enum.AutomaticSize.Y
+		end
 		DescLbl.BackgroundTransparency = 1
 		DescLbl.Font                   = Theme.FontRegular
 		DescLbl.TextSize               = Theme.SmallSize
 		DescLbl.TextColor3             = Theme.TextMuted
 		DescLbl.TextXAlignment         = Enum.TextXAlignment.Left
+		DescLbl.TextYAlignment         = Enum.TextYAlignment.Top
 		DescLbl.TextWrapped            = true
 		DescLbl.LayoutOrder            = 1
 		DescLbl.Text                   = item.Description or ""
