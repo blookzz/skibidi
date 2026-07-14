@@ -245,7 +245,7 @@ function UILib.CreatePanel(Options)
 	MakeCorner(Header, UDim.new(0, Theme.CornerRadius))
 
 	local TitleLabel = Instance.new("TextLabel")
-	TitleLabel.Size                   = UDim2.new(1, -52, 1, 0)
+	TitleLabel.Size                   = UDim2.new(1, -86, 1, 0)
 	TitleLabel.Position               = UDim2.new(0, 14, 0, 0)
 	TitleLabel.BackgroundTransparency = 1
 	TitleLabel.Font                   = Theme.FontBold
@@ -266,11 +266,27 @@ function UILib.CreatePanel(Options)
 	AccentLine.ZIndex                 = 3
 	AccentLine.Parent                 = Header
 
-	-- Minimize button
+	-- Close button
+	local CloseBtn = Instance.new("TextButton")
+	CloseBtn.Size                   = UDim2.new(0, 28, 0, 20)
+	CloseBtn.AnchorPoint            = Vector2.new(1, 0.5)
+	CloseBtn.Position               = UDim2.new(1, -8, 0.5, 0)
+	CloseBtn.BackgroundColor3       = AccentDim
+	CloseBtn.BorderSizePixel        = 0
+	CloseBtn.Font                   = Theme.FontBold
+	CloseBtn.TextSize               = Theme.TitleSize
+	CloseBtn.TextColor3             = Theme.AccentSec
+	CloseBtn.Text                   = "x"
+	CloseBtn.AutoButtonColor        = false
+	CloseBtn.ZIndex                 = 4
+	CloseBtn.Parent                 = Header
+	MakeCorner(CloseBtn, UDim.new(0, 5))
+
+	-- Minimize button (shifted left to make room for the close button)
 	local MinBtn = Instance.new("TextButton")
 	MinBtn.Size                   = UDim2.new(0, 28, 0, 20)
 	MinBtn.AnchorPoint            = Vector2.new(1, 0.5)
-	MinBtn.Position               = UDim2.new(1, -8, 0.5, 0)
+	MinBtn.Position               = UDim2.new(1, -8 - 28 - 6, 0.5, 0)
 	MinBtn.BackgroundColor3       = AccentDim
 	MinBtn.BorderSizePixel        = 0
 	MinBtn.Font                   = Theme.FontBold
@@ -411,15 +427,17 @@ function UILib.CreatePanel(Options)
 	-- The hugging width is computed from the *actual rendered* title
 	-- text each time, so it adapts automatically to any title length.
 	local MIN_BTN_W     = 28   -- MinBtn.Size.X
-	local MIN_BTN_RIGHT = 8    -- MinBtn's right margin (see Position above)
+	local CLOSE_BTN_W   = 28   -- CloseBtn.Size.X
+	local BTN_GAP       = 6    -- gap between MinBtn and CloseBtn
+	local MIN_BTN_RIGHT = 8    -- CloseBtn's right margin (see Position above)
 	local TITLE_LEFT    = 14   -- TitleLabel's left offset (see Position above)
-	local TITLE_GAP     = 10   -- breathing room between title text and button
+	local TITLE_GAP     = 10   -- breathing room between title text and buttons
 
 	local function computeMinimizedWidth()
 		local ok, bounds = pcall(TextService.GetTextSize, TextService,
 			TitleLabel.Text, Theme.TitleSize, Theme.FontBold, Vector2.new(2000, HEADER_H))
 		local textW = (ok and bounds and bounds.X) or 60
-		local mw = TITLE_LEFT + textW + TITLE_GAP + MIN_BTN_W + MIN_BTN_RIGHT
+		local mw = TITLE_LEFT + textW + TITLE_GAP + MIN_BTN_W + BTN_GAP + CLOSE_BTN_W + MIN_BTN_RIGHT
 		return math.clamp(mw, 90, Width)
 	end
 
@@ -505,6 +523,18 @@ function UILib.CreatePanel(Options)
 		TweenService:Create(MinBtn, TweenFast, { BackgroundColor3 = AccentDim }):Play()
 	end)
 
+	local function CloseWindow()
+		if Gui then Gui:Destroy() end
+	end
+
+	CloseBtn.MouseButton1Click:Connect(CloseWindow)
+	CloseBtn.MouseEnter:Connect(function()
+		TweenService:Create(CloseBtn, TweenFast, { BackgroundColor3 = Color3.fromRGB(200, 60, 60) }):Play()
+	end)
+	CloseBtn.MouseLeave:Connect(function()
+		TweenService:Create(CloseBtn, TweenFast, { BackgroundColor3 = AccentDim }):Play()
+	end)
+
 	-- ── Dragging ───────────────────────────────────────────
 	do
 		local dragging, dragStart, startPos = false, nil, nil
@@ -544,6 +574,8 @@ function UILib.CreatePanel(Options)
 		GetActiveTab = function() return activeTab end,
 		SetMinimized = SetMinimized,
 		IsMinimized  = function() return isMinimized end,
+		CloseBtn     = CloseBtn,
+		Close        = CloseWindow,
 		Accent       = Accent,
 		AccentDim    = AccentDim,
 	}
