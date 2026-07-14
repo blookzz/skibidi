@@ -244,8 +244,11 @@ function UILib.CreatePanel(Options)
 	Header.Parent           = Frame
 	MakeCorner(Header, UDim.new(0, Theme.CornerRadius))
 
+	local showDiscord = Options.Discord == true
+	local reservedRight = 86 + (showDiscord and 34 or 0)
+
 	local TitleLabel = Instance.new("TextLabel")
-	TitleLabel.Size                   = UDim2.new(1, -86, 1, 0)
+	TitleLabel.Size                   = UDim2.new(1, -reservedRight, 1, 0)
 	TitleLabel.Position               = UDim2.new(0, 14, 0, 0)
 	TitleLabel.BackgroundTransparency = 1
 	TitleLabel.Font                   = Theme.FontBold
@@ -297,6 +300,55 @@ function UILib.CreatePanel(Options)
 	MinBtn.ZIndex                 = 4
 	MinBtn.Parent                 = Header
 	MakeCorner(MinBtn, UDim.new(0, 5))
+
+	-- Discord button (optional, off by default)
+	-- Options.Discord = true enables it. Clicking copies the invite link
+	-- to the clipboard via setclipboard (when the executor supports it).
+	local DISCORD_INVITE  = "https://discord.gg/rNvAU6cjVB"
+	local DISCORD_ICON_ID = "rbxassetid://5028857472" -- simple Discord mark; swap if it doesn't render for you
+
+	local DiscordBtn
+	if showDiscord then
+		DiscordBtn = Instance.new("TextButton")
+		DiscordBtn.Size                   = UDim2.new(0, 28, 0, 20)
+		DiscordBtn.AnchorPoint            = Vector2.new(1, 0.5)
+		DiscordBtn.Position               = UDim2.new(1, -8 - 28 - 6 - 28 - 6, 0.5, 0)
+		DiscordBtn.BackgroundColor3       = AccentDim
+		DiscordBtn.BorderSizePixel        = 0
+		DiscordBtn.Text                   = ""
+		DiscordBtn.AutoButtonColor        = false
+		DiscordBtn.ZIndex                 = 4
+		DiscordBtn.Parent                 = Header
+		MakeCorner(DiscordBtn, UDim.new(0, 5))
+
+		local DiscordIcon = Instance.new("ImageLabel")
+		DiscordIcon.Size                   = UDim2.new(0, 14, 0, 14)
+		DiscordIcon.AnchorPoint            = Vector2.new(0.5, 0.5)
+		DiscordIcon.Position               = UDim2.new(0.5, 0, 0.5, 0)
+		DiscordIcon.BackgroundTransparency = 1
+		DiscordIcon.Image                  = DISCORD_ICON_ID
+		DiscordIcon.ImageColor3            = Theme.AccentSec
+		DiscordIcon.ZIndex                 = 5
+		DiscordIcon.Parent                 = DiscordBtn
+
+		DiscordBtn.MouseButton1Click:Connect(function()
+			if setclipboard then
+				pcall(setclipboard, DISCORD_INVITE)
+			end
+			DiscordIcon.ImageColor3 = Theme.Accent
+			task.delay(1, function()
+				if DiscordIcon and DiscordIcon.Parent then
+					DiscordIcon.ImageColor3 = Theme.AccentSec
+				end
+			end)
+		end)
+		DiscordBtn.MouseEnter:Connect(function()
+			TweenService:Create(DiscordBtn, TweenFast, { BackgroundColor3 = Theme.ToggleOn }):Play()
+		end)
+		DiscordBtn.MouseLeave:Connect(function()
+			TweenService:Create(DiscordBtn, TweenFast, { BackgroundColor3 = AccentDim }):Play()
+		end)
+	end
 
 	-- ── Tab bar (optional) ─────────────────────────────────
 	local TabBar, TabBtns, TabUnderline
@@ -428,6 +480,7 @@ function UILib.CreatePanel(Options)
 	-- text each time, so it adapts automatically to any title length.
 	local MIN_BTN_W     = 28   -- MinBtn.Size.X
 	local CLOSE_BTN_W   = 28   -- CloseBtn.Size.X
+	local DISCORD_BTN_W = showDiscord and (28 + 6) or 0  -- DiscordBtn.Size.X + gap, if present
 	local BTN_GAP       = 6    -- gap between MinBtn and CloseBtn
 	local MIN_BTN_RIGHT = 8    -- CloseBtn's right margin (see Position above)
 	local TITLE_LEFT    = 14   -- TitleLabel's left offset (see Position above)
@@ -437,7 +490,7 @@ function UILib.CreatePanel(Options)
 		local ok, bounds = pcall(TextService.GetTextSize, TextService,
 			TitleLabel.Text, Theme.TitleSize, Theme.FontBold, Vector2.new(2000, HEADER_H))
 		local textW = (ok and bounds and bounds.X) or 60
-		local mw = TITLE_LEFT + textW + TITLE_GAP + MIN_BTN_W + BTN_GAP + CLOSE_BTN_W + MIN_BTN_RIGHT
+		local mw = TITLE_LEFT + textW + TITLE_GAP + DISCORD_BTN_W + MIN_BTN_W + BTN_GAP + CLOSE_BTN_W + MIN_BTN_RIGHT
 		return math.clamp(mw, 90, Width)
 	end
 
@@ -576,6 +629,7 @@ function UILib.CreatePanel(Options)
 		IsMinimized  = function() return isMinimized end,
 		CloseBtn     = CloseBtn,
 		Close        = CloseWindow,
+		DiscordBtn   = DiscordBtn,
 		Accent       = Accent,
 		AccentDim    = AccentDim,
 	}
@@ -589,7 +643,7 @@ end
 --
 -- Options:
 --   Title     string   Section label
---   Open      bool     Start open (default true)
+--   Open      bool     Start open (default false)
 --
 -- Returns:
 --   { Frame, Content, SetOpen(bool), IsOpen() }
@@ -597,7 +651,7 @@ end
 function UILib.CreateSection(Parent, Options)
 	Options = Options or {}
 	local title    = Options.Title or ""
-	local startOpen = Options.Open ~= false  -- default true
+	local startOpen = Options.Open == true  -- default false
 
 	-- Outer wrapper — AutomaticSize so it grows with content
 	local Wrapper = Instance.new("Frame")
