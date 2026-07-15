@@ -1949,7 +1949,7 @@ function UILib.CreateDropdown(Parent, Options)
 
 		local RingHolder = Instance.new("Frame", Row)
 		RingHolder.Size             = UDim2.new(0, 14, 0, 14)
-		RingHolder.Position         = UDim2.new(0, 10, 0.5, -7)
+		RingHolder.Position         = UDim2.new(0, 5, 0.5, -7)
 		RingHolder.BackgroundColor3 = Theme.Bg3
 		RingHolder.BorderSizePixel  = 0
 		MakeCorner(RingHolder, UDim.new(1, 0))
@@ -1965,7 +1965,7 @@ function UILib.CreateDropdown(Parent, Options)
 
 		local RLbl = Instance.new("TextLabel", Row)
 		RLbl.Size                   = UDim2.new(1, -28, 1, 0)
-		RLbl.Position               = UDim2.new(0, 24, 0, 0)
+		RLbl.Position               = UDim2.new(0, 30, 0, 0)
 		RLbl.BackgroundTransparency = 1
 		RLbl.Font                   = Theme.FontRegular
 		RLbl.TextSize               = Theme.SmallSize + 1
