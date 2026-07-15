@@ -1949,7 +1949,7 @@ function UILib.CreateDropdown(Parent, Options)
 
 		local RingHolder = Instance.new("Frame", Row)
 		RingHolder.Size             = UDim2.new(0, 14, 0, 14)
-		RingHolder.Position         = UDim2.new(0, 5, 0.5, -7)
+		RingHolder.Position         = UDim2.new(0, 10, 0.5, -7)
 		RingHolder.BackgroundColor3 = Theme.Bg3
 		RingHolder.BorderSizePixel  = 0
 		MakeCorner(RingHolder, UDim.new(1, 0))
