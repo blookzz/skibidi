@@ -1,7 +1,7 @@
 -- ============================================================
 -- UILib.lua  |  Self-contained loadstring library
 -- Usage:
---   local UILib = loadstring(game:HttpGet("YOUR_RAW_URL"))()
+--   local UILib = loadstring(game:HttpGet("https://raw.githubusercontent.com/blookzz/skibidi/refs/heads/main/UILib.lua"))()
 -- ============================================================
 
 local UILib = {}
