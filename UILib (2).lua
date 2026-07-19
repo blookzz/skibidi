@@ -11,6 +11,7 @@ local UILib = {}
 -- ============================================================
 local TweenService     = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
+local HttpService      = game:GetService("HttpService")
 local TextService      = game:GetService("TextService")
 local RunService       = game:GetService("RunService")
 local Players          = game:GetService("Players")
@@ -170,6 +171,64 @@ local function MakeHoverFill(Head, inset, radius)
 	return Fill
 end
 
+-- Connects a service-level signal (UserInputService etc.) and disconnects
+-- it automatically when `owner` is destroyed. Without this, every slider,
+-- color picker, keybind and panel drag handler would keep its global
+-- connection alive forever after its GUI is gone — a slow leak for any
+-- script that creates panels repeatedly.
+local function ConnectScoped(owner, signal, fn)
+	local conn = signal:Connect(fn)
+	owner.Destroying:Connect(function()
+		conn:Disconnect()
+	end)
+	return conn
+end
+
+-- ── Overlay registry ────────────────────────────────────────
+-- At most one expanding overlay (Dropdown list / ColorPicker panel) is
+-- open at a time: opening one closes the previous, and clicking anywhere
+-- outside the open overlay's card closes it. The outside-click watcher
+-- only exists while an overlay is open, so idle cost is zero.
+local _openOverlay  = nil   -- { Card = GuiObject, Close = fn }
+local _overlayWatch = nil
+
+local function OverlayClosed(card)
+	if _openOverlay and _openOverlay.Card == card then
+		_openOverlay = nil
+		if _overlayWatch then
+			_overlayWatch:Disconnect()
+			_overlayWatch = nil
+		end
+	end
+end
+
+local function OverlayOpened(card, closeFn)
+	if _openOverlay and _openOverlay.Card ~= card then
+		_openOverlay.Close()
+	end
+	_openOverlay = { Card = card, Close = closeFn }
+	if not _overlayWatch then
+		_overlayWatch = UserInputService.InputBegan:Connect(function(inp)
+			if inp.UserInputType ~= Enum.UserInputType.MouseButton1
+			and inp.UserInputType ~= Enum.UserInputType.Touch then return end
+			local o = _openOverlay
+			if not o or not o.Card.Parent then return end
+			local p, s = o.Card.AbsolutePosition, o.Card.AbsoluteSize
+			local x, y = inp.Position.X, inp.Position.Y
+			if x < p.X or x > p.X + s.X or y < p.Y or y > p.Y + s.Y then
+				o.Close()
+			end
+		end)
+	end
+end
+
+-- ── Config flags ────────────────────────────────────────────
+-- Components created with Options.Flag = "someKey" register themselves
+-- here so SaveConfig/LoadConfig can persist and restore their values.
+-- Purely opt-in: components without a Flag are never registered.
+local Flags = {}
+UILib.Flags = Flags
+
 -- Default parent used by CreatePanel when Options.Parent is omitted.
 -- Overridable in one place via UILib.Init({ Parent = someInstance }).
 local DefaultParent = PlayerGui
@@ -187,6 +246,8 @@ local DefaultParent = PlayerGui
 --   DefaultTab   number    Initially active tab index  (default 1)
 --   Variant      string    "gold"|"blue"|"green"|"red" (optional)
 --   Minimized    bool      Start minimized             (default false)
+--   ClampToScreen bool     Keep the panel inside the screen while
+--                          dragging                    (default false)
 --
 -- Returns:
 --   {
@@ -663,6 +724,7 @@ function UILib.CreatePanel(Options)
 
 	-- ── Dragging ───────────────────────────────────────────
 	do
+		local clampToScreen = Options.ClampToScreen == true
 		local dragging, dragStart, startPos = false, nil, nil
 		Header.InputBegan:Connect(function(inp)
 			if inp.UserInputType ~= Enum.UserInputType.MouseButton1
@@ -676,14 +738,26 @@ function UILib.CreatePanel(Options)
 				end
 			end)
 		end)
-		UserInputService.InputChanged:Connect(function(inp)
+		-- Scoped: the service-level connection dies with the panel's Gui
+		-- instead of leaking after Close().
+		ConnectScoped(Gui, UserInputService.InputChanged, function(inp)
 			if not dragging then return end
 			if inp.UserInputType ~= Enum.UserInputType.MouseMovement
 			and inp.UserInputType ~= Enum.UserInputType.Touch then return end
 			local d = inp.Position - dragStart
-			Frame.Position = UDim2.new(
+			local pos = UDim2.new(
 				startPos.X.Scale, startPos.X.Offset + d.X,
 				startPos.Y.Scale, startPos.Y.Offset + d.Y)
+			if clampToScreen then
+				local screen = Gui.AbsoluteSize
+				local fw, fh = Frame.AbsoluteSize.X, Frame.AbsoluteSize.Y
+				local absX = math.clamp(pos.X.Scale * screen.X + pos.X.Offset, 0, math.max(0, screen.X - fw))
+				local absY = math.clamp(pos.Y.Scale * screen.Y + pos.Y.Offset, 0, math.max(0, screen.Y - fh))
+				pos = UDim2.new(
+					pos.X.Scale, absX - pos.X.Scale * screen.X,
+					pos.Y.Scale, absY - pos.Y.Scale * screen.Y)
+			end
+			Frame.Position = pos
 		end)
 	end
 
@@ -995,6 +1069,18 @@ function UILib.CreateToggle(Parent, Options)
 		TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
 	end)
 
+	if Options.Flag then
+		Flags[Options.Flag] = {
+			Kind = "toggle",
+			Get  = function() return state end,
+			Set  = function(v)
+				local on = v == true
+				Set(on)
+				if Options.OnChanged then Options.OnChanged(on, Set) end
+			end,
+		}
+	end
+
 	return { Frame = Row, Set = Set, GetValue = function() return state end }
 end
 
@@ -1071,6 +1157,22 @@ function UILib.CreateTextInput(Parent, Options)
 	Row.MouseLeave:Connect(function()
 		TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
 	end)
+
+	if Options.Flag then
+		Flags[Options.Flag] = {
+			Kind = "text",
+			Get  = function() return Box.Text end,
+			Set  = function(v)
+				v = tostring(v)
+				if Options.NumericOnly then
+					local n = tonumber(v:match("%d+"))
+					v = n and tostring(n) or ""
+				end
+				Box.Text = v
+				if Options.OnSubmit then Options.OnSubmit(v) end
+			end,
+		}
+	end
 
 	return { Frame = Row, TextBox = Box, GetValue = function() return Box.Text end }
 end
@@ -1174,7 +1276,7 @@ function UILib.CreateSlider(Parent, Options)
 			Update(Min + ((x - Track.AbsolutePosition.X) / Track.AbsoluteSize.X) * (Max - Min))
 		end
 	end)
-	UserInputService.InputEnded:Connect(function(inp)
+	ConnectScoped(Row, UserInputService.InputEnded, function(inp)
 		if inp.UserInputType == Enum.UserInputType.MouseButton1
 		or inp.UserInputType == Enum.UserInputType.Touch then
 			if dragging then
@@ -1183,7 +1285,7 @@ function UILib.CreateSlider(Parent, Options)
 			dragging = false
 		end
 	end)
-	UserInputService.InputChanged:Connect(function(inp)
+	ConnectScoped(Row, UserInputService.InputChanged, function(inp)
 		if dragging and (inp.UserInputType == Enum.UserInputType.MouseMovement
 		or inp.UserInputType == Enum.UserInputType.Touch) then
 			local x = inp.Position.X
@@ -1197,6 +1299,14 @@ function UILib.CreateSlider(Parent, Options)
 	Row.MouseLeave:Connect(function()
 		TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
 	end)
+
+	if Options.Flag then
+		Flags[Options.Flag] = {
+			Kind = "number",
+			Get  = function() return cur end,
+			Set  = function(val) if type(val) == "number" then Update(val) end end,
+		}
+	end
 
 	return { Frame = Row, Update = Update, GetValue = function() return cur end }
 end
@@ -1332,6 +1442,23 @@ function UILib.CreateInputList(Parent, Options)
 		end)
 
 		boxes[i] = TB
+	end
+
+	if Options.Flag then
+		Flags[Options.Flag] = {
+			Kind = "table",
+			Get  = function() return values end,
+			Set  = function(t)
+				if type(t) ~= "table" then return end
+				for i = 1, count do
+					if t[i] ~= nil then
+						values[i] = tostring(t[i])
+						if boxes[i] then boxes[i].Text = values[i] end
+						if Options.OnChanged then Options.OnChanged(i, values[i]) end
+					end
+				end
+			end,
+		}
 	end
 
 	return {
@@ -1547,8 +1674,14 @@ end
 
 -- ============================================================
 -- MakeDraggable (standalone utility)
+--
+-- Options (optional third argument):
+--   ClampToScreen  bool   Keep Target inside its parent container
+--                         while dragging (default false)
 -- ============================================================
-function UILib.MakeDraggable(Handle, Target)
+function UILib.MakeDraggable(Handle, Target, Options)
+	Options = Options or {}
+	local clampToScreen = Options.ClampToScreen == true
 	local dragging, dragStart, startPos = false, nil, nil
 	Handle.InputBegan:Connect(function(inp)
 		if inp.UserInputType ~= Enum.UserInputType.MouseButton1
@@ -1560,14 +1693,26 @@ function UILib.MakeDraggable(Handle, Target)
 			if inp.UserInputState == Enum.UserInputState.End then dragging = false end
 		end)
 	end)
-	UserInputService.InputChanged:Connect(function(inp)
+	ConnectScoped(Target, UserInputService.InputChanged, function(inp)
 		if not dragging then return end
 		if inp.UserInputType ~= Enum.UserInputType.MouseMovement
 		and inp.UserInputType ~= Enum.UserInputType.Touch then return end
 		local d = inp.Position - dragStart
-		Target.Position = UDim2.new(
+		local pos = UDim2.new(
 			startPos.X.Scale, startPos.X.Offset + d.X,
 			startPos.Y.Scale, startPos.Y.Offset + d.Y)
+		if clampToScreen and Target.Parent then
+			local ok, screen = pcall(function() return Target.Parent.AbsoluteSize end)
+			if ok and screen and screen.X > 0 and screen.Y > 0 then
+				local tw, th = Target.AbsoluteSize.X, Target.AbsoluteSize.Y
+				local absX = math.clamp(pos.X.Scale * screen.X + pos.X.Offset, 0, math.max(0, screen.X - tw))
+				local absY = math.clamp(pos.Y.Scale * screen.Y + pos.Y.Offset, 0, math.max(0, screen.Y - th))
+				pos = UDim2.new(
+					pos.X.Scale, absX - pos.X.Scale * screen.X,
+					pos.Y.Scale, absY - pos.Y.Scale * screen.Y)
+			end
+		end
+		Target.Position = pos
 	end)
 end
 
@@ -1912,6 +2057,20 @@ function UILib.CreateGroup(Parent, Options)
 
 	refresh()
 
+	if Options.Flag then
+		Flags[Options.Flag] = {
+			Kind = "number",
+			Get  = function() return current end,
+			Set  = function(i)
+				if type(i) == "number" and items[i] then
+					current = i
+					refresh()
+					if Options.OnChanged then Options.OnChanged(i, items[i]) end
+				end
+			end,
+		}
+	end
+
 	return {
 		Frame    = Card,
 		SetValue = function(i) current = i; refresh() end,
@@ -2044,7 +2203,13 @@ function UILib.CreateDropdown(Parent, Options)
 		TweenService:Create(Chevron, TweenMed,
 			{ Rotation   = open and 180 or 0,
 			  TextColor3 = open and Theme.Accent or Theme.AccentDim }):Play()
+		if open then
+			OverlayOpened(Card, function() setOpen(false) end)
+		else
+			OverlayClosed(Card)
+		end
 	end
+	Card.Destroying:Connect(function() OverlayClosed(Card) end)
 
 	for i, text in ipairs(items) do
 		local Row = Instance.new("TextButton", List)
@@ -2120,18 +2285,41 @@ function UILib.CreateDropdown(Parent, Options)
 		setOpen(not isOpen)
 	end)
 
+	local function getValue()
+		if multi then
+			local out = {}
+			for _, val in ipairs(items) do if selected[val] then table.insert(out, val) end end
+			return out
+		end
+		for _, val in ipairs(items) do if selected[val] then return val end end
+		return nil
+	end
+
+	if Options.Flag then
+		Flags[Options.Flag] = {
+			Kind = multi and "table" or "value",
+			Get  = getValue,
+			Set  = function(v)
+				selected = {}
+				if multi then
+					if type(v) == "table" then
+						for _, val in ipairs(v) do selected[val] = true end
+					end
+				else
+					if type(v) == "number" then v = items[v] end
+					if v ~= nil then selected[v] = true end
+				end
+				refreshRows()
+				refreshLabel()
+				if Options.OnChanged then Options.OnChanged(getValue()) end
+			end,
+		}
+	end
+
 	return {
 		Frame    = Card,
 		SetOpen  = setOpen,
-		GetValue = function()
-			if multi then
-				local out = {}
-				for _, val in ipairs(items) do if selected[val] then table.insert(out, val) end end
-				return out
-			end
-			for _, val in ipairs(items) do if selected[val] then return val end end
-			return nil
-		end,
+		GetValue = getValue,
 	}
 end
 
@@ -2194,6 +2382,10 @@ function UILib.CreateKeybind(Parent, Options)
 		TweenService:Create(keyStroke, TweenFast, { Color = Theme.AccentDim, Thickness = 1 }):Play()
 		if conn then conn:Disconnect(); conn = nil end
 	end
+	-- If the row dies while capturing, drop the global InputBegan hook
+	Row.Destroying:Connect(function()
+		if conn then conn:Disconnect(); conn = nil end
+	end)
 
 	KeyBtn.MouseButton1Click:Connect(function()
 		if listening then stopListening(); return end
@@ -2216,6 +2408,25 @@ function UILib.CreateKeybind(Parent, Options)
 	Row.MouseLeave:Connect(function()
 		TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
 	end)
+
+	if Options.Flag then
+		Flags[Options.Flag] = {
+			Kind = "keybind",
+			Get  = function() return current and current.Name or nil end,
+			Set  = function(v)
+				local kc = v
+				if type(kc) == "string" then
+					local ok, parsed = pcall(function() return Enum.KeyCode[kc] end)
+					kc = ok and parsed or nil
+				end
+				if typeof(kc) == "EnumItem" then
+					current = kc
+					KeyBtn.Text = kc.Name
+					if Options.OnChanged then Options.OnChanged(current) end
+				end
+			end,
+		}
+	end
 
 	return {
 		Frame = Row,
@@ -2703,12 +2914,12 @@ function UILib.CreateColorPicker(Parent, Options)
 			jumpHue(inp.Position)
 		end
 	end)
-	UserInputService.InputEnded:Connect(function(inp)
+	ConnectScoped(Card, UserInputService.InputEnded, function(inp)
 		if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
 			draggingSV, draggingHue = false, false
 		end
 	end)
-	UserInputService.InputChanged:Connect(function(inp)
+	ConnectScoped(Card, UserInputService.InputChanged, function(inp)
 		if inp.UserInputType ~= Enum.UserInputType.MouseMovement and inp.UserInputType ~= Enum.UserInputType.Touch then return end
 		if draggingSV then jumpSV(inp.Position)
 		elseif draggingHue then jumpHue(inp.Position) end
@@ -2732,11 +2943,30 @@ function UILib.CreateColorPicker(Parent, Options)
 	local function setOpen(open)
 		isOpen = open
 		Panel.Visible = open
+		if open then
+			OverlayOpened(Card, function() setOpen(false) end)
+		else
+			OverlayClosed(Card)
+		end
 	end
+	Card.Destroying:Connect(function() OverlayClosed(Card) end)
 
 	Head.MouseButton1Click:Connect(function()
 		setOpen(not isOpen)
 	end)
+
+	if Options.Flag then
+		Flags[Options.Flag] = {
+			Kind = "color",
+			Get  = function() return current end,
+			Set  = function(c)
+				if typeof(c) == "Color3" then
+					h, s, v = Color3.toHSV(c)
+					updateFromHSV(true)
+				end
+			end,
+		}
+	end
 
 	return {
 		Frame    = Card,
@@ -2773,6 +3003,83 @@ function UILib.Init(Options)
 		DefaultParent = Options.Parent
 	end
 	return UILib
+end
+
+-- ============================================================
+-- SaveConfig / LoadConfig
+-- Optional persistence for component values, backed by the
+-- executor's writefile/readfile. Both are safe no-ops (returning
+-- false + a reason) when the executor doesn't support file APIs,
+-- so scripts that never call them — or run without file access —
+-- are completely unaffected.
+--
+-- To opt a component in, give it a Flag key at creation:
+--   UILib.CreateToggle(tab, { Label = "ESP", Flag = "esp", ... })
+-- Supported: Toggle (bool), Slider (number), TextInput (string),
+-- Dropdown (string / array if Multi), Keybind (key name string),
+-- ColorPicker (RGB table), Group (index), InputList (array).
+--
+--   UILib.SaveConfig(name)  → true  |  false, err
+--   UILib.LoadConfig(name)  → true  |  false, err
+--
+-- `name` defaults to "UILibConfig"; files are stored as
+-- "<name>.json" in the executor's workspace folder. Loading
+-- applies each saved value through the component's setter and
+-- fires its OnChanged/OnSubmit so consuming scripts stay in sync.
+-- ============================================================
+local function configFileName(name)
+	return tostring(name or "UILibConfig") .. ".json"
+end
+
+function UILib.SaveConfig(name)
+	if type(writefile) ~= "function" then
+		return false, "writefile is not supported by this executor"
+	end
+	local data = {}
+	for flag, entry in pairs(Flags) do
+		local ok, v = pcall(entry.Get)
+		if ok and v ~= nil then
+			if entry.Kind == "color" then
+				v = {
+					R = math.floor(v.R * 255 + 0.5),
+					G = math.floor(v.G * 255 + 0.5),
+					B = math.floor(v.B * 255 + 0.5),
+				}
+			end
+			data[flag] = v
+		end
+	end
+	local okEncode, json = pcall(HttpService.JSONEncode, HttpService, data)
+	if not okEncode then return false, json end
+	local okWrite, err = pcall(writefile, configFileName(name), json)
+	if not okWrite then return false, err end
+	return true
+end
+
+function UILib.LoadConfig(name)
+	if type(readfile) ~= "function" then
+		return false, "readfile is not supported by this executor"
+	end
+	local file = configFileName(name)
+	if type(isfile) == "function" and not isfile(file) then
+		return false, "no such config: " .. file
+	end
+	local okRead, json = pcall(readfile, file)
+	if not okRead then return false, json end
+	local okDecode, data = pcall(HttpService.JSONDecode, HttpService, json)
+	if not okDecode or type(data) ~= "table" then
+		return false, "invalid config file: " .. file
+	end
+	for flag, v in pairs(data) do
+		local entry = Flags[flag]
+		if entry then
+			if entry.Kind == "color" and type(v) == "table" then
+				v = Color3.fromRGB(v.R or 255, v.G or 255, v.B or 255)
+			end
+			pcall(entry.Set, v)
+		end
+	end
+	return true
 end
 
 -- ============================================================
@@ -3089,6 +3396,8 @@ end
 -- themselves are implemented.
 -- ============================================================
 UILib.init        = UILib.Init
+UILib.saveconfig  = UILib.SaveConfig
+UILib.loadconfig  = UILib.LoadConfig
 UILib.button      = UILib.CreateButton
 UILib.code        = UILib.CreateCode
 UILib.colorpicker = UILib.CreateColorPicker
