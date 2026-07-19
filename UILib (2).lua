@@ -110,6 +110,19 @@ local function MakePadding(parent, l, r, t, b)
 	return p
 end
 
+-- Multiplicative vertical gradient: full colour at the top fading a touch
+-- darker at the bottom. Because it multiplies the parent's (possibly
+-- tweened) BackgroundColor3 it adds depth to any surface without
+-- introducing new palette colours or fighting hover/state tweens.
+local function MakeSheen(parent, strength)
+	local g = Instance.new("UIGradient")
+	g.Rotation = 90
+	local k = 1 - (strength or 0.12)
+	g.Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.new(k, k, k))
+	g.Parent = parent
+	return g
+end
+
 local function MakeListLayout(parent, dir, pad, ha, va)
 	local l = Instance.new("UIListLayout")
 	l.FillDirection       = dir or Enum.FillDirection.Vertical
@@ -235,13 +248,44 @@ function UILib.CreatePanel(Options)
 	Frame.Parent                 = Gui
 	MakeCorner(Frame, UDim.new(0, Theme.CornerRadius))
 	MakeStroke(Frame, Accent, 1.2)
+	MakeSheen(Frame, 0.10)
+
+	-- Drop shadow. The panel clips its descendants, so the shadow lives
+	-- as a sibling underneath it and mirrors the panel's Position/Size
+	-- (property signals fire every frame during drags and tweens, so it
+	-- tracks minimize/restore and dragging for free).
+	local SHADOW_PAD = 27
+	local Shadow = Instance.new("ImageLabel")
+	Shadow.Name                   = "Shadow"
+	Shadow.BackgroundTransparency = 1
+	Shadow.Image                  = "rbxassetid://6014261993"
+	Shadow.ImageColor3            = Color3.new(0, 0, 0)
+	Shadow.ImageTransparency      = 0.42
+	Shadow.ScaleType              = Enum.ScaleType.Slice
+	Shadow.SliceCenter            = Rect.new(49, 49, 450, 450)
+	Shadow.ZIndex                 = 0
+	Shadow.Parent                 = Gui
+
+	local function syncShadow()
+		local p, s = Frame.Position, Frame.Size
+		Shadow.Position = UDim2.new(p.X.Scale, p.X.Offset - SHADOW_PAD, p.Y.Scale, p.Y.Offset - SHADOW_PAD + 5)
+		Shadow.Size     = UDim2.new(s.X.Scale, s.X.Offset + SHADOW_PAD * 2, s.Y.Scale, s.Y.Offset + SHADOW_PAD * 2)
+	end
+	Frame:GetPropertyChangedSignal("Position"):Connect(syncShadow)
+	Frame:GetPropertyChangedSignal("Size"):Connect(syncShadow)
+	syncShadow()
 
 	-- Entrance: gentle pop-in on creation (UIScale rests at 1 afterwards,
-	-- so it never affects layout or dragging).
+	-- so it never affects layout or dragging). The shadow scales in with
+	-- the panel so it doesn't hang oversized around the smaller frame.
 	local OpenScale = Instance.new("UIScale")
 	OpenScale.Scale  = 0.92
 	OpenScale.Parent = Frame
-	TweenService:Create(OpenScale, TweenSpring, { Scale = 1 }):Play()
+	local ShadowScale = Instance.new("UIScale")
+	ShadowScale.Scale  = 0.92
+	ShadowScale.Parent = Shadow
+	TweenService:Create(OpenScale,   TweenSpring, { Scale = 1 }):Play()
+	TweenService:Create(ShadowScale, TweenSpring, { Scale = 1 }):Play()
 
 	-- ── Title / Header bar ─────────────────────────────────
 	local Header = Instance.new("Frame")
@@ -810,6 +854,10 @@ function UILib.CreateButton(Parent, Options)
 
 	local Btn = Instance.new("TextButton")
 	Btn.Size                   = UDim2.new(1, 0, 1, 0)
+	-- Centered anchor so the hover/press UIScale below scales the label
+	-- symmetrically about the middle of the row.
+	Btn.AnchorPoint            = Vector2.new(0.5, 0.5)
+	Btn.Position               = UDim2.new(0.5, 0, 0.5, 0)
 	Btn.BackgroundTransparency = 1
 	Btn.BorderSizePixel        = 0
 	Btn.Font                   = Theme.FontRegular
@@ -819,6 +867,9 @@ function UILib.CreateButton(Parent, Options)
 	Btn.Text                   = Options.Text or ""
 	Btn.AutoButtonColor        = false
 	Btn.Parent                 = RowBg
+
+	local BtnScale = Instance.new("UIScale")
+	BtnScale.Parent = Btn
 
 	local restColor  = Options.Color or Theme.Bg2
 	local hoverColor = Color3.fromRGB(
@@ -831,19 +882,24 @@ function UILib.CreateButton(Parent, Options)
 		math.max(restColor.B * 255 - 8, 0) / 255)
 
 	Btn.MouseEnter:Connect(function()
-		TweenService:Create(RowBg, TweenFast, { BackgroundColor3 = hoverColor }):Play()
-		TweenService:Create(Btn,   TweenFast, { TextColor3 = Theme.Accent }):Play()
+		TweenService:Create(RowBg,    TweenFast, { BackgroundColor3 = hoverColor }):Play()
+		TweenService:Create(Btn,      TweenFast, { TextColor3 = Theme.Accent }):Play()
+		TweenService:Create(BtnScale, TweenFast, { Scale = 1.02 }):Play()
 	end)
 	Btn.MouseLeave:Connect(function()
-		TweenService:Create(RowBg, TweenFast, { BackgroundColor3 = restColor }):Play()
-		TweenService:Create(Btn,   TweenFast, { TextColor3 = Options.TextColor or Theme.TextPrimary }):Play()
+		TweenService:Create(RowBg,    TweenFast, { BackgroundColor3 = restColor }):Play()
+		TweenService:Create(Btn,      TweenFast, { TextColor3 = Options.TextColor or Theme.TextPrimary }):Play()
+		TweenService:Create(BtnScale, TweenFast, { Scale = 1 }):Play()
 	end)
-	-- Press feedback: dip below rest colour on press, release back to hover
+	-- Press feedback: dip below rest colour + shrink slightly on press,
+	-- release back to the hover state
 	Btn.MouseButton1Down:Connect(function()
-		TweenService:Create(RowBg, TweenFast, { BackgroundColor3 = pressColor }):Play()
+		TweenService:Create(RowBg,    TweenFast, { BackgroundColor3 = pressColor }):Play()
+		TweenService:Create(BtnScale, TweenFast, { Scale = 0.97 }):Play()
 	end)
 	Btn.MouseButton1Up:Connect(function()
-		TweenService:Create(RowBg, TweenFast, { BackgroundColor3 = hoverColor }):Play()
+		TweenService:Create(RowBg,    TweenFast, { BackgroundColor3 = hoverColor }):Play()
+		TweenService:Create(BtnScale, TweenSpring, { Scale = 1.02 }):Play()
 	end)
 
 	if Options.OnClick then
@@ -898,6 +954,7 @@ function UILib.CreateToggle(Parent, Options)
 	Track.BackgroundColor3 = state and Theme.ToggleOn or Theme.ToggleOff
 	Track.BorderSizePixel  = 0
 	MakeCorner(Track, UDim.new(1, 0))
+	MakeSheen(Track, 0.18)
 
 	-- Knob
 	local Knob = Instance.new("Frame", Track)
@@ -995,10 +1052,10 @@ function UILib.CreateTextInput(Parent, Options)
 	local boxStroke = MakeStroke(Box, Theme.AccentDim, 1)
 
 	Box.Focused:Connect(function()
-		TweenService:Create(boxStroke, TweenFast, { Color = Theme.Accent }):Play()
+		TweenService:Create(boxStroke, TweenFast, { Color = Theme.Accent, Thickness = 1.5 }):Play()
 	end)
 	Box.FocusLost:Connect(function(ep)
-		TweenService:Create(boxStroke, TweenFast, { Color = Theme.AccentDim }):Play()
+		TweenService:Create(boxStroke, TweenFast, { Color = Theme.AccentDim, Thickness = 1 }):Play()
 		local val = Box.Text
 		if Options.NumericOnly then
 			local n = tonumber(val:match("%d+"))
@@ -1086,6 +1143,7 @@ function UILib.CreateSlider(Parent, Options)
 	Fill.BackgroundColor3 = Theme.Accent
 	Fill.BorderSizePixel  = 0
 	MakeCorner(Fill, UDim.new(1, 0))
+	MakeSheen(Fill, 0.20)
 
 	local Knob = Instance.new("Frame", Track)
 	Knob.Size             = UDim2.new(0, 12, 0, 12)
@@ -1262,10 +1320,10 @@ function UILib.CreateInputList(Parent, Options)
 		TB.Text               = values[i]
 
 		TB.Focused:Connect(function()
-			TweenService:Create(slotStroke, TweenFast, { Color = Theme.Accent }):Play()
+			TweenService:Create(slotStroke, TweenFast, { Color = Theme.Accent, Thickness = 1.5 }):Play()
 		end)
 		TB.FocusLost:Connect(function()
-			TweenService:Create(slotStroke, TweenFast, { Color = Theme.AccentDim }):Play()
+			TweenService:Create(slotStroke, TweenFast, { Color = Theme.AccentDim, Thickness = 1 }):Play()
 			values[i] = TB.Text
 			if Options.OnChanged then Options.OnChanged(i, TB.Text) end
 		end)
@@ -1440,6 +1498,7 @@ function UILib.ShowNotification(Title, Text)
 	F.ClipsDescendants       = true
 	MakeCorner(F, UDim.new(0, Theme.CornerRadiusSmall))
 	MakeStroke(F, Theme.Accent, 1.2)
+	MakeSheen(F, 0.10)
 
 	-- Thin accent left bar
 	local Bar = Instance.new("Frame", F)
@@ -1635,6 +1694,7 @@ function UILib.CreateProgressBar(Parent, Options)
 	Fill.BackgroundColor3 = Theme.Accent
 	Fill.BorderSizePixel  = 0
 	MakeCorner(Fill, UDim.new(1, 0))
+	MakeSheen(Fill, 0.20)
 
 	local function Update(val, instant)
 		val = math.clamp(val, Min, Max)
@@ -2131,7 +2191,7 @@ function UILib.CreateKeybind(Parent, Options)
 
 	local function stopListening()
 		listening = false
-		TweenService:Create(keyStroke, TweenFast, { Color = Theme.AccentDim }):Play()
+		TweenService:Create(keyStroke, TweenFast, { Color = Theme.AccentDim, Thickness = 1 }):Play()
 		if conn then conn:Disconnect(); conn = nil end
 	end
 
@@ -2139,7 +2199,7 @@ function UILib.CreateKeybind(Parent, Options)
 		if listening then stopListening(); return end
 		listening = true
 		KeyBtn.Text = "..."
-		TweenService:Create(keyStroke, TweenFast, { Color = Theme.Accent }):Play()
+		TweenService:Create(keyStroke, TweenFast, { Color = Theme.Accent, Thickness = 1.5 }):Play()
 		conn = UserInputService.InputBegan:Connect(function(inp)
 			if inp.UserInputType == Enum.UserInputType.Keyboard then
 				current = inp.KeyCode
@@ -2595,7 +2655,11 @@ function UILib.CreateColorPicker(Parent, Options)
 	HexBox.TextColor3        = Theme.AccentSec
 	HexBox.ClearTextOnFocus  = false
 	MakeCorner(HexBox, UDim.new(0, 5))
-	MakeStroke(HexBox, Theme.AccentDim, 1)
+	local hexStroke = MakeStroke(HexBox, Theme.AccentDim, 1)
+
+	HexBox.Focused:Connect(function()
+		TweenService:Create(hexStroke, TweenFast, { Color = Theme.Accent, Thickness = 1.5 }):Play()
+	end)
 
 	local function updateFromHSV(fireEvent)
 		current = Color3.fromHSV(h, s, v)
@@ -2651,6 +2715,7 @@ function UILib.CreateColorPicker(Parent, Options)
 	end)
 
 	HexBox.FocusLost:Connect(function()
+		TweenService:Create(hexStroke, TweenFast, { Color = Theme.AccentDim, Thickness = 1 }):Play()
 		local hex = string.gsub(HexBox.Text, "#", "")
 		if #hex == 6 and string.match(hex, "^%x+$") then
 			local r = tonumber(string.sub(hex, 1, 2), 16) / 255
