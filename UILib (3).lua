@@ -1,7 +1,7 @@
 -- ============================================================
 -- UILib.lua  |  Self-contained loadstring library
 -- Usage:
---   local UILib = loadstring(game:HttpGet("https://raw.githubusercontent.com/blookzz/skibidi/refs/heads/main/UILib.lua"))()
+-- local UILib = loadstring(game:HttpGet("https://raw.githubusercontent.com/blookzz/skibidi/refs/heads/main/UILib.lua"))()
 -- ============================================================
 
 local UILib = {}
@@ -767,9 +767,18 @@ function UILib.CreatePanel(Options)
 	local TITLE_GAP     = 10   -- breathing room between title text and buttons
 
 	local function computeMinimizedWidth()
-		local ok, bounds = pcall(TextService.GetTextSize, TextService,
-			TitleLabel.Text, Theme.TitleSize, Theme.FontBold, Vector2.new(2000, HEADER_H))
-		local textW = (ok and bounds and bounds.X) or 60
+		-- Prefer the label's own rendered TextBounds: it accounts for
+		-- RichText markup (e.g. the inline subtitle <font> tag), which
+		-- GetTextSize does not — GetTextSize would measure the raw tag
+		-- characters and blow the width up past Width, defeating the
+		-- horizontal shrink. Fall back to GetTextSize if TextBounds is
+		-- not yet populated.
+		local textW = TitleLabel.TextBounds.X
+		if not textW or textW <= 0 then
+			local ok, bounds = pcall(TextService.GetTextSize, TextService,
+				TitleLabel.Text, Theme.TitleSize, Theme.FontBold, Vector2.new(2000, HEADER_H))
+			textW = (ok and bounds and bounds.X) or 60
+		end
 		local mw = TITLE_LEFT + textW + TITLE_GAP + DISCORD_BTN_W + MIN_BTN_W + BTN_GAP + CLOSE_BTN_W + MIN_BTN_RIGHT
 		return math.clamp(mw, 90, Width)
 	end
