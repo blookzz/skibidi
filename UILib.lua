@@ -1,7 +1,7 @@
 -- ============================================================
 -- UILib.lua  |  Self-contained loadstring library
 -- Usage:
---   local UILib = loadstring(game:HttpGet("https://raw.githubusercontent.com/blookzz/skibidi/refs/heads/main/UILib.lua"))()
+-- local UILib = loadstring(game:HttpGet("https://raw.githubusercontent.com/blookzz/skibidi/refs/heads/main/UILib.lua"))()
 -- ============================================================
 
 local UILib = {}
@@ -11,6 +11,8 @@ local UILib = {}
 -- ============================================================
 local TweenService     = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
+local HttpService      = game:GetService("HttpService")
+local GuiService       = game:GetService("GuiService")
 local TextService      = game:GetService("TextService")
 local RunService       = game:GetService("RunService")
 local Players          = game:GetService("Players")
@@ -38,6 +40,9 @@ local Theme = {
 	ToggleOff        = Color3.fromRGB(38,  34,  26),
 	ToggleOn         = Color3.fromRGB(180, 120,  40),
 	Knob             = Color3.fromRGB(255, 220, 140),
+
+	-- Interaction
+	Hover            = Color3.fromRGB(32,  30,  24),
 	ToggleW          = 40,
 	ToggleH          = 20,
 	KnobSz           = 16,
@@ -57,7 +62,7 @@ local Theme = {
 	CornerRadius     = 10,
 	CornerRadiusSmall = 8,
 	CornerRadiusXs   = 6,
-	Padding          = 10,
+	Padding          = 12,
 	PaddingSmall     = 6,
 	FontBold         = Enum.Font.GothamBlack,
 	FontMedium       = Enum.Font.GothamBold,
@@ -77,8 +82,9 @@ UILib.Theme = Theme
 -- ============================================================
 -- INTERNAL HELPERS
 -- ============================================================
-local TweenFast = TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-local TweenMed  = TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local TweenFast   = TweenInfo.new(0.14, Enum.EasingStyle.Quad,  Enum.EasingDirection.Out)
+local TweenMed    = TweenInfo.new(0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+local TweenSpring = TweenInfo.new(0.28, Enum.EasingStyle.Back,  Enum.EasingDirection.Out)
 
 local function MakeCorner(parent, radius)
 	local c = Instance.new("UICorner")
@@ -104,6 +110,19 @@ local function MakePadding(parent, l, r, t, b)
 	p.PaddingBottom = UDim.new(0, b or 0)
 	p.Parent        = parent
 	return p
+end
+
+-- Multiplicative vertical gradient: full colour at the top fading a touch
+-- darker at the bottom. Because it multiplies the parent's (possibly
+-- tweened) BackgroundColor3 it adds depth to any surface without
+-- introducing new palette colours or fighting hover/state tweens.
+local function MakeSheen(parent, strength)
+	local g = Instance.new("UIGradient")
+	g.Rotation = 90
+	local k = 1 - (strength or 0.12)
+	g.Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.new(k, k, k))
+	g.Parent = parent
+	return g
 end
 
 local function MakeListLayout(parent, dir, pad, ha, va)
@@ -142,7 +161,7 @@ local function MakeHoverFill(Head, inset, radius)
 	MakeCorner(Fill, UDim.new(0, radius or 6))
 
 	Head.MouseEnter:Connect(function()
-		TweenService:Create(Fill, TweenFast, { BackgroundColor3 = Color3.fromRGB(32,30,24) }):Play()
+		TweenService:Create(Fill, TweenFast, { BackgroundColor3 = Theme.Hover }):Play()
 		Fill.BackgroundTransparency = 0
 	end)
 	Head.MouseLeave:Connect(function()
@@ -151,6 +170,133 @@ local function MakeHoverFill(Head, inset, radius)
 	end)
 
 	return Fill
+end
+
+-- Connects a service-level signal (UserInputService etc.) and disconnects
+-- it automatically when `owner` is destroyed. Without this, every slider,
+-- color picker, keybind and panel drag handler would keep its global
+-- connection alive forever after its GUI is gone — a slow leak for any
+-- script that creates panels repeatedly.
+local function ConnectScoped(owner, signal, fn)
+	local conn = signal:Connect(fn)
+	owner.Destroying:Connect(function()
+		conn:Disconnect()
+	end)
+	return conn
+end
+
+-- ── Overlay registry ────────────────────────────────────────
+-- At most one expanding overlay (Dropdown list / ColorPicker panel) is
+-- open at a time: opening one closes the previous, and clicking anywhere
+-- outside the open overlay's card closes it. The outside-click watcher
+-- only exists while an overlay is open, so idle cost is zero.
+local _openOverlay  = nil   -- { Card = GuiObject, Close = fn }
+local _overlayWatch = nil
+
+local function OverlayClosed(card)
+	if _openOverlay and _openOverlay.Card == card then
+		_openOverlay = nil
+		if _overlayWatch then
+			_overlayWatch:Disconnect()
+			_overlayWatch = nil
+		end
+	end
+end
+
+local function OverlayOpened(card, closeFn)
+	if _openOverlay and _openOverlay.Card ~= card then
+		_openOverlay.Close()
+	end
+	_openOverlay = { Card = card, Close = closeFn }
+	if not _overlayWatch then
+		_overlayWatch = UserInputService.InputBegan:Connect(function(inp)
+			if inp.UserInputType ~= Enum.UserInputType.MouseButton1
+			and inp.UserInputType ~= Enum.UserInputType.Touch then return end
+			local o = _openOverlay
+			if not o or not o.Card.Parent then return end
+			local p, s = o.Card.AbsolutePosition, o.Card.AbsoluteSize
+			local x, y = inp.Position.X, inp.Position.Y
+			if x < p.X or x > p.X + s.X or y < p.Y or y > p.Y + s.Y then
+				o.Close()
+			end
+		end)
+	end
+end
+
+-- ── Config flags ────────────────────────────────────────────
+-- Components created with Options.Flag = "someKey" register themselves
+-- here so SaveConfig/LoadConfig can persist and restore their values.
+-- Purely opt-in: components without a Flag are never registered.
+local Flags = {}
+UILib.Flags = Flags
+
+-- ── Panel registry ──────────────────────────────────────────
+-- Every ScreenGui the library creates is tracked here so
+-- UILib.Unload() can tear the whole UI down in one call.
+local _allGuis = {}
+
+-- ── Tooltip ─────────────────────────────────────────────────
+-- One shared tooltip for the whole library. Components opt in with
+-- Options.Tooltip = "text"; it follows the mouse, clamps to the screen
+-- and hides itself when the hovered element dies.
+local _tooltipSg, _tooltipFrame, _tooltipLbl
+
+local function _ensureTooltip()
+	if _tooltipSg and _tooltipSg.Parent then return end
+	_tooltipSg = Instance.new("ScreenGui")
+	_tooltipSg.Name           = "UILibTooltip"
+	_tooltipSg.ResetOnSpawn   = false
+	_tooltipSg.DisplayOrder   = 2000
+	_tooltipSg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	_tooltipSg.Parent         = PlayerGui
+
+	_tooltipFrame = Instance.new("Frame")
+	_tooltipFrame.AutomaticSize          = Enum.AutomaticSize.XY
+	_tooltipFrame.BackgroundColor3       = Theme.Bg0
+	_tooltipFrame.BackgroundTransparency = 0.05
+	_tooltipFrame.BorderSizePixel        = 0
+	_tooltipFrame.Visible                = false
+	_tooltipFrame.Parent                 = _tooltipSg
+	MakeCorner(_tooltipFrame, UDim.new(0, Theme.CornerRadiusXs))
+	MakeStroke(_tooltipFrame, Theme.AccentDim, 1)
+	MakePadding(_tooltipFrame, 8, 8, 5, 5)
+
+	_tooltipLbl = Instance.new("TextLabel")
+	_tooltipLbl.AutomaticSize          = Enum.AutomaticSize.XY
+	_tooltipLbl.BackgroundTransparency = 1
+	_tooltipLbl.Font                   = Theme.FontRegular
+	_tooltipLbl.TextSize               = Theme.SmallSize
+	_tooltipLbl.TextColor3             = Theme.TextPrimary
+	_tooltipLbl.Parent                 = _tooltipFrame
+end
+
+local function _positionTooltip()
+	local loc   = UserInputService:GetMouseLocation()
+	local inset = GuiService:GetGuiInset()
+	local x, y  = loc.X - inset.X + 16, loc.Y - inset.Y + 14
+	local screen, sz = _tooltipSg.AbsoluteSize, _tooltipFrame.AbsoluteSize
+	x = math.max(0, math.min(x, screen.X - sz.X - 4))
+	y = math.max(0, math.min(y, screen.Y - sz.Y - 4))
+	_tooltipFrame.Position = UDim2.fromOffset(x, y)
+end
+
+local function AttachTooltip(target, text)
+	if not text or text == "" then return end
+	target.MouseEnter:Connect(function()
+		_ensureTooltip()
+		_tooltipLbl.Text      = text
+		_tooltipFrame.Visible = true
+		_positionTooltip()
+	end)
+	target.MouseMoved:Connect(function()
+		if _tooltipFrame and _tooltipFrame.Visible then _positionTooltip() end
+	end)
+	target.MouseLeave:Connect(function()
+		if _tooltipFrame then _tooltipFrame.Visible = false end
+	end)
+	target.Destroying:Connect(function()
+		if _tooltipFrame then _tooltipFrame.Visible = false end
+	end)
 end
 
 -- Default parent used by CreatePanel when Options.Parent is omitted.
@@ -168,8 +314,17 @@ local DefaultParent = PlayerGui
 --   Height       number    Content height in pixels    (default 300)
 --   Tabs         table     Array of tab name strings   (optional — omit for no tabs)
 --   DefaultTab   number    Initially active tab index  (default 1)
+--   TabSide      string    "top" | "left"              (default "top")
+--                          "left" renders a vertical tab rail instead
+--                          of the horizontal bar under the header
+--   TabWidth     number    Rail width when TabSide="left" (default 96)
+--   SubTitle     string    Small muted text after the title (optional)
 --   Variant      string    "gold"|"blue"|"green"|"red" (optional)
 --   Minimized    bool      Start minimized             (default false)
+--   ClampToScreen bool     Keep the panel inside the screen while
+--                          dragging                    (default false)
+--   ToggleKey    Enum.KeyCode | string   Hotkey that shows/hides the
+--                          whole panel (optional)
 --
 -- Returns:
 --   {
@@ -179,6 +334,9 @@ local DefaultParent = PlayerGui
 --     GetTab(index),     -- returns the Frame for tab[index]  (nil if no tabs)
 --     SetTab(index),     -- switches active tab
 --     GetActiveTab(),    -- returns current tab index
+--     GetTabButton(index), SetTitle(text),
+--     SetVisible(bool), ToggleVisible(), IsVisible(),
+--     SetMinimized(bool), IsMinimized(), Close(),
 --   }
 -- ============================================================
 function UILib.CreatePanel(Options)
@@ -206,9 +364,12 @@ function UILib.CreatePanel(Options)
 		AccentDim = Theme.AccentDim
 	end
 
-	-- Height constants
+	-- Layout constants. Side tabs replace the horizontal bar with a
+	-- vertical rail, so the bar contributes no height in that mode.
+	local sideTabs   = hasTabs and Options.TabSide == "left"
 	local HEADER_H   = Theme.HeaderHeight
-	local TABBAR_H   = hasTabs and Theme.TabHeight or 0
+	local TABBAR_H   = (hasTabs and not sideTabs) and Theme.TabHeight or 0
+	local RAIL_W     = sideTabs and (Options.TabWidth or 96) or 0
 	local CONTENT_H  = Options.Height or 300
 	local FULL_H     = HEADER_H + TABBAR_H + CONTENT_H
 
@@ -218,6 +379,7 @@ function UILib.CreatePanel(Options)
 	Gui.ResetOnSpawn   = false
 	Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 	Gui.Parent         = Options.Parent or DefaultParent
+	table.insert(_allGuis, Gui)
 
 	-- ── Main frame ─────────────────────────────────────────
 	local Frame = Instance.new("Frame")
@@ -231,6 +393,44 @@ function UILib.CreatePanel(Options)
 	Frame.Parent                 = Gui
 	MakeCorner(Frame, UDim.new(0, Theme.CornerRadius))
 	MakeStroke(Frame, Accent, 1.2)
+	MakeSheen(Frame, 0.10)
+
+	-- Drop shadow. The panel clips its descendants, so the shadow lives
+	-- as a sibling underneath it and mirrors the panel's Position/Size
+	-- (property signals fire every frame during drags and tweens, so it
+	-- tracks minimize/restore and dragging for free).
+	local SHADOW_PAD = 27
+	local Shadow = Instance.new("ImageLabel")
+	Shadow.Name                   = "Shadow"
+	Shadow.BackgroundTransparency = 1
+	Shadow.Image                  = "rbxassetid://6014261993"
+	Shadow.ImageColor3            = Color3.new(0, 0, 0)
+	Shadow.ImageTransparency      = 0.42
+	Shadow.ScaleType              = Enum.ScaleType.Slice
+	Shadow.SliceCenter            = Rect.new(49, 49, 450, 450)
+	Shadow.ZIndex                 = 0
+	Shadow.Parent                 = Gui
+
+	local function syncShadow()
+		local p, s = Frame.Position, Frame.Size
+		Shadow.Position = UDim2.new(p.X.Scale, p.X.Offset - SHADOW_PAD, p.Y.Scale, p.Y.Offset - SHADOW_PAD + 5)
+		Shadow.Size     = UDim2.new(s.X.Scale, s.X.Offset + SHADOW_PAD * 2, s.Y.Scale, s.Y.Offset + SHADOW_PAD * 2)
+	end
+	Frame:GetPropertyChangedSignal("Position"):Connect(syncShadow)
+	Frame:GetPropertyChangedSignal("Size"):Connect(syncShadow)
+	syncShadow()
+
+	-- Entrance: gentle pop-in on creation (UIScale rests at 1 afterwards,
+	-- so it never affects layout or dragging). The shadow scales in with
+	-- the panel so it doesn't hang oversized around the smaller frame.
+	local OpenScale = Instance.new("UIScale")
+	OpenScale.Scale  = 0.92
+	OpenScale.Parent = Frame
+	local ShadowScale = Instance.new("UIScale")
+	ShadowScale.Scale  = 0.92
+	ShadowScale.Parent = Shadow
+	TweenService:Create(OpenScale,   TweenSpring, { Scale = 1 }):Play()
+	TweenService:Create(ShadowScale, TweenSpring, { Scale = 1 }):Play()
 
 	-- ── Title / Header bar ─────────────────────────────────
 	local Header = Instance.new("Frame")
@@ -259,6 +459,19 @@ function UILib.CreatePanel(Options)
 	TitleLabel.ZIndex                 = 3
 	TitleLabel.Parent                 = Header
 
+	-- Optional small muted subtitle rendered inline after the title
+	if Options.SubTitle and Options.SubTitle ~= "" then
+		local m = Theme.TextMuted
+		TitleLabel.RichText = true
+		TitleLabel.Text     = string.format(
+			'%s  <font size="%d" color="#%02X%02X%02X">%s</font>',
+			Options.Title or "", Theme.CaptionSize,
+			math.floor(m.R * 255 + 0.5),
+			math.floor(m.G * 255 + 0.5),
+			math.floor(m.B * 255 + 0.5),
+			Options.SubTitle)
+	end
+
 	-- Accent underline on header
 	local AccentLine = Instance.new("Frame")
 	AccentLine.Size                   = UDim2.new(1, -20, 0, 1)
@@ -269,6 +482,17 @@ function UILib.CreatePanel(Options)
 	AccentLine.ZIndex                 = 3
 	AccentLine.Parent                 = Header
 
+	-- Fade the underline out toward both ends so it reads as a glow
+	-- rather than a hard rule.
+	local AccentLineGrad = Instance.new("UIGradient")
+	AccentLineGrad.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0.00, 1),
+		NumberSequenceKeypoint.new(0.18, 0),
+		NumberSequenceKeypoint.new(0.82, 0),
+		NumberSequenceKeypoint.new(1.00, 1),
+	})
+	AccentLineGrad.Parent = AccentLine
+
 	-- Close button
 	local CloseBtn = Instance.new("TextButton")
 	CloseBtn.Size                   = UDim2.new(0, 28, 0, 20)
@@ -276,10 +500,10 @@ function UILib.CreatePanel(Options)
 	CloseBtn.Position               = UDim2.new(1, -8, 0.5, 0)
 	CloseBtn.BackgroundColor3       = AccentDim
 	CloseBtn.BorderSizePixel        = 0
-	CloseBtn.Font                   = Theme.FontBold
-	CloseBtn.TextSize               = Theme.TitleSize
+	CloseBtn.Font                   = Theme.FontIcon
+	CloseBtn.TextSize               = 16
 	CloseBtn.TextColor3             = Theme.AccentSec
-	CloseBtn.Text                   = "x"
+	CloseBtn.Text                   = "×"
 	CloseBtn.AutoButtonColor        = false
 	CloseBtn.ZIndex                 = 4
 	CloseBtn.Parent                 = Header
@@ -292,8 +516,8 @@ function UILib.CreatePanel(Options)
 	MinBtn.Position               = UDim2.new(1, -8 - 28 - 6, 0.5, 0)
 	MinBtn.BackgroundColor3       = AccentDim
 	MinBtn.BorderSizePixel        = 0
-	MinBtn.Font                   = Theme.FontBold
-	MinBtn.TextSize               = Theme.TitleSize
+	MinBtn.Font                   = Theme.FontIcon
+	MinBtn.TextSize               = 16
 	MinBtn.TextColor3             = Theme.AccentSec
 	MinBtn.Text                   = "–"
 	MinBtn.AutoButtonColor        = false
@@ -351,8 +575,10 @@ function UILib.CreatePanel(Options)
 	end
 
 	-- ── Tab bar (optional) ─────────────────────────────────
+	-- "top"  — horizontal bar of equal-width buttons under the header
+	-- "left" — vertical rail of full-width buttons beside the content
 	local TabBar, TabBtns, TabUnderline
-	if hasTabs then
+	if hasTabs and not sideTabs then
 		TabBar = Instance.new("Frame")
 		TabBar.Position               = UDim2.new(0, 0, 0, HEADER_H)
 		TabBar.Size                   = UDim2.new(1, 0, 0, TABBAR_H)
@@ -401,6 +627,52 @@ function UILib.CreatePanel(Options)
 			fit.MaxTextSize = 12; fit.MinTextSize = 8
 			TabBtns[i] = btn
 		end
+	elseif sideTabs then
+		-- Vertical tab rail on a slightly darker strip so it reads as
+		-- navigation, separated from content by a 1px divider.
+		TabBar = Instance.new("Frame")
+		TabBar.Position               = UDim2.new(0, 0, 0, HEADER_H)
+		TabBar.Size                   = UDim2.new(0, RAIL_W, 1, -HEADER_H)
+		TabBar.BackgroundColor3       = Theme.Bg0
+		TabBar.BackgroundTransparency = 0.35
+		TabBar.BorderSizePixel        = 0
+		TabBar.ZIndex                 = 2
+		TabBar.Parent                 = Frame
+		MakePadding(TabBar, 6, 6, 8, 8)
+		MakeListLayout(TabBar, Enum.FillDirection.Vertical, 4)
+
+		-- Vertical divider between the rail and the content area
+		-- (kept in TabUnderline so minimize/restore hides it too)
+		TabUnderline = Instance.new("Frame")
+		TabUnderline.Size                   = UDim2.new(0, 1, 1, -(HEADER_H + 10))
+		TabUnderline.Position               = UDim2.new(0, RAIL_W, 0, HEADER_H + 5)
+		TabUnderline.BackgroundColor3       = AccentDim
+		TabUnderline.BackgroundTransparency = 0.3
+		TabUnderline.BorderSizePixel        = 0
+		TabUnderline.ZIndex                 = 2
+		TabUnderline.Parent                 = Frame
+
+		TabBtns = {}
+		for i, name in ipairs(Tabs) do
+			local btn = Instance.new("TextButton")
+			btn.Size              = UDim2.new(1, 0, 0, 28)
+			btn.LayoutOrder       = i
+			btn.BackgroundColor3  = Theme.Bg2
+			btn.BorderSizePixel   = 0
+			btn.AutoButtonColor   = false
+			btn.Font              = Theme.FontMedium
+			btn.TextSize          = Theme.SmallSize
+			btn.TextColor3        = Theme.TextMuted
+			btn.TextXAlignment    = Enum.TextXAlignment.Left
+			btn.TextTruncate      = Enum.TextTruncate.AtEnd
+			btn.Text              = name
+			btn.ZIndex            = 3
+			btn.Parent            = TabBar
+			MakeCorner(btn, UDim.new(0, 6))
+			MakeStroke(btn, AccentDim, 1)
+			MakePadding(btn, 10, 6, 0, 0)
+			TabBtns[i] = btn
+		end
 	end
 
 	-- ── Content area ───────────────────────────────────────
@@ -410,12 +682,13 @@ function UILib.CreatePanel(Options)
 
 	for i = 1, tabCount do
 		local sf = Instance.new("ScrollingFrame")
-		sf.Position               = UDim2.new(0, 0, 0, HEADER_H + TABBAR_H)
-		sf.Size                   = UDim2.new(1, 0, 1, -(HEADER_H + TABBAR_H))
+		sf.Position               = UDim2.new(0, RAIL_W, 0, HEADER_H + TABBAR_H)
+		sf.Size                   = UDim2.new(1, -RAIL_W, 1, -(HEADER_H + TABBAR_H))
 		sf.BackgroundTransparency = 1
 		sf.BorderSizePixel        = 0
 		sf.ScrollBarThickness     = 3
 		sf.ScrollBarImageColor3   = AccentDim
+		sf.ScrollBarImageTransparency = 0.25
 		sf.ScrollingDirection     = Enum.ScrollingDirection.Y
 		sf.AutomaticCanvasSize    = Enum.AutomaticSize.Y
 		sf.CanvasSize             = UDim2.new(0, 0, 0, 0)
@@ -428,13 +701,20 @@ function UILib.CreatePanel(Options)
 	end
 
 	-- ── Tab switching logic ────────────────────────────────
-	local function applyTabStyle()
+	local function applyTabStyle(animate)
 		if not hasTabs then return end
 		for i, btn in ipairs(TabBtns) do
 			local on = (i == activeTab)
-			btn.BackgroundColor3 = on and Theme.ToggleOn or Theme.Bg2
-			btn.TextColor3       = on and Theme.ActiveTabText or Theme.TextMuted
-			btn.Font             = on and Theme.FontBold or Theme.FontMedium
+			local bg   = on and Theme.ToggleOn or Theme.Bg2
+			local text = on and Theme.ActiveTabText or Theme.TextMuted
+			if animate then
+				TweenService:Create(btn, TweenFast,
+					{ BackgroundColor3 = bg, TextColor3 = text }):Play()
+			else
+				btn.BackgroundColor3 = bg
+				btn.TextColor3       = text
+			end
+			btn.Font = on and Theme.FontBold or Theme.FontMedium
 		end
 	end
 
@@ -444,7 +724,7 @@ function UILib.CreatePanel(Options)
 		for i, sf in ipairs(tabFrames) do
 			sf.Visible = (i == idx)
 		end
-		applyTabStyle()
+		applyTabStyle(true)
 	end
 
 	if hasTabs then
@@ -455,7 +735,7 @@ function UILib.CreatePanel(Options)
 			btn.MouseEnter:Connect(function()
 				if activeTab ~= idx then
 					TweenService:Create(btn, TweenFast,
-						{ BackgroundColor3 = Color3.fromRGB(32,30,24) }):Play()
+						{ BackgroundColor3 = Theme.Hover }):Play()
 				end
 			end)
 			btn.MouseLeave:Connect(function()
@@ -590,6 +870,7 @@ function UILib.CreatePanel(Options)
 
 	-- ── Dragging ───────────────────────────────────────────
 	do
+		local clampToScreen = Options.ClampToScreen == true
 		local dragging, dragStart, startPos = false, nil, nil
 		Header.InputBegan:Connect(function(inp)
 			if inp.UserInputType ~= Enum.UserInputType.MouseButton1
@@ -603,15 +884,50 @@ function UILib.CreatePanel(Options)
 				end
 			end)
 		end)
-		UserInputService.InputChanged:Connect(function(inp)
+		-- Scoped: the service-level connection dies with the panel's Gui
+		-- instead of leaking after Close().
+		ConnectScoped(Gui, UserInputService.InputChanged, function(inp)
 			if not dragging then return end
 			if inp.UserInputType ~= Enum.UserInputType.MouseMovement
 			and inp.UserInputType ~= Enum.UserInputType.Touch then return end
 			local d = inp.Position - dragStart
-			Frame.Position = UDim2.new(
+			local pos = UDim2.new(
 				startPos.X.Scale, startPos.X.Offset + d.X,
 				startPos.Y.Scale, startPos.Y.Offset + d.Y)
+			if clampToScreen then
+				local screen = Gui.AbsoluteSize
+				local fw, fh = Frame.AbsoluteSize.X, Frame.AbsoluteSize.Y
+				local absX = math.clamp(pos.X.Scale * screen.X + pos.X.Offset, 0, math.max(0, screen.X - fw))
+				local absY = math.clamp(pos.Y.Scale * screen.Y + pos.Y.Offset, 0, math.max(0, screen.Y - fh))
+				pos = UDim2.new(
+					pos.X.Scale, absX - pos.X.Scale * screen.X,
+					pos.Y.Scale, absY - pos.Y.Scale * screen.Y)
+			end
+			Frame.Position = pos
 		end)
+	end
+
+	-- ── Visibility (programmatic + optional hotkey) ────────
+	local function SetVisible(visible)
+		Gui.Enabled = visible == true
+	end
+	local function ToggleVisible()
+		Gui.Enabled = not Gui.Enabled
+	end
+	do
+		local tk = Options.ToggleKey
+		if type(tk) == "string" then
+			local ok, parsed = pcall(function() return Enum.KeyCode[tk] end)
+			tk = ok and parsed or nil
+		end
+		if typeof(tk) == "EnumItem" then
+			ConnectScoped(Gui, UserInputService.InputBegan, function(inp, gameProcessed)
+				if gameProcessed then return end
+				if inp.UserInputType == Enum.UserInputType.Keyboard and inp.KeyCode == tk then
+					ToggleVisible()
+				end
+			end)
+		end
 	end
 
 	-- ── Return ─────────────────────────────────────────────
@@ -625,8 +941,13 @@ function UILib.CreatePanel(Options)
 		GetTab       = function(i) return tabFrames[i] end,
 		SetTab       = SetTab,
 		GetActiveTab = function() return activeTab end,
+		GetTabButton = function(i) return TabBtns and TabBtns[i] end,
+		SetTitle     = function(t) TitleLabel.Text = t or "" end,
 		SetMinimized = SetMinimized,
 		IsMinimized  = function() return isMinimized end,
+		SetVisible   = SetVisible,
+		ToggleVisible = ToggleVisible,
+		IsVisible    = function() return Gui.Enabled end,
 		CloseBtn     = CloseBtn,
 		Close        = CloseWindow,
 		DiscordBtn   = DiscordBtn,
@@ -644,9 +965,10 @@ end
 -- Options:
 --   Title     string   Section label
 --   Open      bool     Start open (default false)
+--   Tooltip   string   Hover tooltip (optional)
 --
 -- Returns:
---   { Frame, Content, SetOpen(bool), IsOpen() }
+--   { Frame, Content, SetOpen(bool), IsOpen(), SetTitle(text) }
 -- ============================================================
 function UILib.CreateSection(Parent, Options)
 	Options = Options or {}
@@ -661,13 +983,16 @@ function UILib.CreateSection(Parent, Options)
 	Wrapper.BorderSizePixel  = 0
 	Wrapper.ClipsDescendants = true
 	Wrapper.Parent           = Parent
-	MakeCorner(Wrapper, UDim.new(0, 7))
+	MakeCorner(Wrapper, UDim.new(0, Theme.CornerRadiusSmall))
 	MakeStroke(Wrapper, Theme.AccentDim, 1)
 
 	local WrapLayout = Instance.new("UIListLayout", Wrapper)
 	WrapLayout.Padding    = UDim.new(0, 0)
 	WrapLayout.SortOrder  = Enum.SortOrder.LayoutOrder
 	WrapLayout.FillDirection = Enum.FillDirection.Vertical
+	-- Center children so the inset divider (1, -16) gets an even 8px
+	-- margin on both sides instead of hugging the left edge.
+	WrapLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 
 	-- Header row (clickable)
 	local HeaderRow = Instance.new("TextButton")
@@ -734,21 +1059,23 @@ function UILib.CreateSection(Parent, Options)
 		isOpen = open
 		Content.Visible  = open
 		Divider.Visible  = open
-		Arrow.Text       = open and "▲" or "▼"
-		TweenService:Create(Arrow, TweenFast,
-			{ TextColor3 = open and Theme.Accent or Theme.AccentDim }):Play()
+		TweenService:Create(Arrow, TweenMed,
+			{ Rotation   = open and 180 or 0,
+			  TextColor3 = open and Theme.Accent or Theme.AccentDim }):Play()
 	end
 	SetOpen(startOpen)
 
 	HeaderRow.MouseButton1Click:Connect(function()
 		SetOpen(not isOpen)
 	end)
+	AttachTooltip(HeaderRow, Options.Tooltip)
 
 	return {
-		Frame   = Wrapper,
-		Content = Content,
-		SetOpen = SetOpen,
-		IsOpen  = function() return isOpen end,
+		Frame    = Wrapper,
+		Content  = Content,
+		SetOpen  = SetOpen,
+		IsOpen   = function() return isOpen end,
+		SetTitle = function(t) TitleLbl.Text = t or "" end,
 	}
 end
 
@@ -762,8 +1089,12 @@ end
 --   TextColor   Color3               (default Theme.TextPrimary)
 --   Height      number               (default 34)
 --   OnClick     function
+--   Tooltip     string   Hover tooltip (optional)
+--   Confirm     bool     First click arms the button ("Confirm?"),
+--                        second click within 2s fires OnClick
+--   ConfirmText string   Armed label (default "Confirm?")
 --
--- Returns: { Frame, Button }
+-- Returns: { Frame, Button, SetText(text), SetDisabled(bool) }
 -- ============================================================
 function UILib.CreateButton(Parent, Options)
 	Options = Options or {}
@@ -773,11 +1104,15 @@ function UILib.CreateButton(Parent, Options)
 	RowBg.BackgroundColor3 = Options.Color or Theme.Bg2
 	RowBg.BorderSizePixel  = 0
 	RowBg.Parent           = Parent
-	MakeCorner(RowBg, UDim.new(0, 7))
+	MakeCorner(RowBg, UDim.new(0, Theme.CornerRadiusSmall))
 	MakeStroke(RowBg, Theme.AccentDim, 1)
 
 	local Btn = Instance.new("TextButton")
 	Btn.Size                   = UDim2.new(1, 0, 1, 0)
+	-- Centered anchor so the hover/press UIScale below scales the label
+	-- symmetrically about the middle of the row.
+	Btn.AnchorPoint            = Vector2.new(0.5, 0.5)
+	Btn.Position               = UDim2.new(0.5, 0, 0.5, 0)
 	Btn.BackgroundTransparency = 1
 	Btn.BorderSizePixel        = 0
 	Btn.Font                   = Theme.FontRegular
@@ -788,26 +1123,87 @@ function UILib.CreateButton(Parent, Options)
 	Btn.AutoButtonColor        = false
 	Btn.Parent                 = RowBg
 
+	local BtnScale = Instance.new("UIScale")
+	BtnScale.Parent = Btn
+
 	local restColor  = Options.Color or Theme.Bg2
 	local hoverColor = Color3.fromRGB(
 		math.min(restColor.R * 255 + 14, 255) / 255,
 		math.min(restColor.G * 255 + 14, 255) / 255,
 		math.min(restColor.B * 255 + 14, 255) / 255)
+	local pressColor = Color3.fromRGB(
+		math.max(restColor.R * 255 - 8, 0) / 255,
+		math.max(restColor.G * 255 - 8, 0) / 255,
+		math.max(restColor.B * 255 - 8, 0) / 255)
+
+	local disabled = false
 
 	Btn.MouseEnter:Connect(function()
-		TweenService:Create(RowBg, TweenFast, { BackgroundColor3 = hoverColor }):Play()
-		TweenService:Create(Btn,   TweenFast, { TextColor3 = Theme.Accent }):Play()
+		if disabled then return end
+		TweenService:Create(RowBg,    TweenFast, { BackgroundColor3 = hoverColor }):Play()
+		TweenService:Create(Btn,      TweenFast, { TextColor3 = Theme.Accent }):Play()
+		TweenService:Create(BtnScale, TweenFast, { Scale = 1.02 }):Play()
 	end)
 	Btn.MouseLeave:Connect(function()
-		TweenService:Create(RowBg, TweenFast, { BackgroundColor3 = restColor }):Play()
-		TweenService:Create(Btn,   TweenFast, { TextColor3 = Options.TextColor or Theme.TextPrimary }):Play()
+		if disabled then return end
+		TweenService:Create(RowBg,    TweenFast, { BackgroundColor3 = restColor }):Play()
+		TweenService:Create(Btn,      TweenFast, { TextColor3 = Options.TextColor or Theme.TextPrimary }):Play()
+		TweenService:Create(BtnScale, TweenFast, { Scale = 1 }):Play()
+	end)
+	-- Press feedback: dip below rest colour + shrink slightly on press,
+	-- release back to the hover state
+	Btn.MouseButton1Down:Connect(function()
+		if disabled then return end
+		TweenService:Create(RowBg,    TweenFast, { BackgroundColor3 = pressColor }):Play()
+		TweenService:Create(BtnScale, TweenFast, { Scale = 0.97 }):Play()
+	end)
+	Btn.MouseButton1Up:Connect(function()
+		if disabled then return end
+		TweenService:Create(RowBg,    TweenFast, { BackgroundColor3 = hoverColor }):Play()
+		TweenService:Create(BtnScale, TweenSpring, { Scale = 1.02 }):Play()
 	end)
 
-	if Options.OnClick then
-		Btn.MouseButton1Click:Connect(Options.OnClick)
+	-- Confirm mode: first click arms, second click (within 2s) fires.
+	local armed, armToken = false, 0
+	local baseText = Options.Text or ""
+	local function disarm()
+		armed = false
+		armToken = armToken + 1
+		Btn.Text = baseText
 	end
 
-	return { Frame = RowBg, Button = Btn }
+	Btn.MouseButton1Click:Connect(function()
+		if disabled then return end
+		if Options.Confirm and not armed then
+			armed = true
+			armToken = armToken + 1
+			local myToken = armToken
+			Btn.Text = Options.ConfirmText or "Confirm?"
+			TweenService:Create(Btn, TweenFast, { TextColor3 = Theme.AccentSec }):Play()
+			task.delay(2, function()
+				if armed and myToken == armToken and Btn.Parent then disarm() end
+			end)
+			return
+		end
+		if armed then disarm() end
+		if Options.OnClick then Options.OnClick() end
+	end)
+
+	AttachTooltip(RowBg, Options.Tooltip)
+
+	local function SetDisabled(on)
+		disabled = on == true
+		if armed then disarm() end
+		TweenService:Create(Btn,   TweenFast, { TextTransparency = disabled and 0.55 or 0 }):Play()
+		TweenService:Create(RowBg, TweenFast, { BackgroundColor3 = restColor }):Play()
+	end
+
+	return {
+		Frame       = RowBg,
+		Button      = Btn,
+		SetText     = function(t) baseText = t or ""; if not armed then Btn.Text = baseText end end,
+		SetDisabled = SetDisabled,
+	}
 end
 
 -- ============================================================
@@ -818,8 +1214,10 @@ end
 --   Label        string
 --   Default      bool     Initial state (default false)
 --   OnChanged    function(newState, SetFn)
+--   Tooltip      string   Hover tooltip (optional)
+--   Flag         string   Config key for SaveConfig/LoadConfig
 --
--- Returns: { Frame, Set(bool), GetValue() }
+-- Returns: { Frame, Set(bool), GetValue(), SetDisabled(bool) }
 -- ============================================================
 function UILib.CreateToggle(Parent, Options)
 	Options = Options or {}
@@ -834,7 +1232,7 @@ function UILib.CreateToggle(Parent, Options)
 	Row.BackgroundColor3 = Theme.Bg2
 	Row.BorderSizePixel  = 0
 	Row.Parent           = Parent
-	MakeCorner(Row, UDim.new(0, 7))
+	MakeCorner(Row, UDim.new(0, Theme.CornerRadiusSmall))
 	MakeStroke(Row, Theme.AccentDim, 1)
 
 	local Lbl = Instance.new("TextLabel", Row)
@@ -855,6 +1253,7 @@ function UILib.CreateToggle(Parent, Options)
 	Track.BackgroundColor3 = state and Theme.ToggleOn or Theme.ToggleOff
 	Track.BorderSizePixel  = 0
 	MakeCorner(Track, UDim.new(1, 0))
+	MakeSheen(Track, 0.18)
 
 	-- Knob
 	local Knob = Instance.new("Frame", Track)
@@ -877,25 +1276,50 @@ function UILib.CreateToggle(Parent, Options)
 		state = on
 		TweenService:Create(Track, TweenFast,
 			{ BackgroundColor3 = on and Theme.ToggleOn or Theme.ToggleOff }):Play()
-		TweenService:Create(Knob,  TweenFast,
+		TweenService:Create(Knob,  TweenSpring,
 			{ Position = on
 				and UDim2.new(0, W - K - 2, 0.5, -K/2)
 				or  UDim2.new(0, 2,         0.5, -K/2) }):Play()
 	end
 
+	local disabled = false
+
 	ClickBtn.MouseButton1Click:Connect(function()
+		if disabled then return end
 		local newState = not state
 		Set(newState)
 		if Options.OnChanged then Options.OnChanged(newState, Set) end
 	end)
 	ClickBtn.MouseEnter:Connect(function()
-		TweenService:Create(Row, TweenFast, { BackgroundColor3 = Color3.fromRGB(32,30,24) }):Play()
+		if disabled then return end
+		TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Hover }):Play()
 	end)
 	ClickBtn.MouseLeave:Connect(function()
 		TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
 	end)
+	AttachTooltip(Row, Options.Tooltip)
 
-	return { Frame = Row, Set = Set, GetValue = function() return state end }
+	local function SetDisabled(on)
+		disabled = on == true
+		local t = disabled and 0.5 or 0
+		TweenService:Create(Lbl,   TweenFast, { TextTransparency = t }):Play()
+		TweenService:Create(Track, TweenFast, { BackgroundTransparency = disabled and 0.4 or 0 }):Play()
+		TweenService:Create(Knob,  TweenFast, { BackgroundTransparency = disabled and 0.4 or 0 }):Play()
+	end
+
+	if Options.Flag then
+		Flags[Options.Flag] = {
+			Kind = "toggle",
+			Get  = function() return state end,
+			Set  = function(v)
+				local on = v == true
+				Set(on)
+				if Options.OnChanged then Options.OnChanged(on, Set) end
+			end,
+		}
+	end
+
+	return { Frame = Row, Set = Set, GetValue = function() return state end, SetDisabled = SetDisabled }
 end
 
 -- ============================================================
@@ -908,7 +1332,10 @@ end
 --   Default      string
 --   Width        number   Box width (default 60)
 --   NumericOnly  bool     Only allow numeric input
+--   MaxLength    number   Hard cap on text length (optional)
 --   OnSubmit     function(text)  called on FocusLost
+--   Tooltip      string   Hover tooltip (optional)
+--   Flag         string   Config key for SaveConfig/LoadConfig
 --
 -- Returns: { Frame, TextBox, GetValue() }
 -- ============================================================
@@ -921,7 +1348,7 @@ function UILib.CreateTextInput(Parent, Options)
 	Row.BackgroundColor3 = Theme.Bg2
 	Row.BorderSizePixel  = 0
 	Row.Parent           = Parent
-	MakeCorner(Row, UDim.new(0, 7))
+	MakeCorner(Row, UDim.new(0, Theme.CornerRadiusSmall))
 	MakeStroke(Row, Theme.AccentDim, 1)
 
 	local Lbl = Instance.new("TextLabel", Row)
@@ -952,10 +1379,10 @@ function UILib.CreateTextInput(Parent, Options)
 	local boxStroke = MakeStroke(Box, Theme.AccentDim, 1)
 
 	Box.Focused:Connect(function()
-		TweenService:Create(boxStroke, TweenFast, { Color = Theme.Accent }):Play()
+		TweenService:Create(boxStroke, TweenFast, { Color = Theme.Accent, Thickness = 1.5 }):Play()
 	end)
 	Box.FocusLost:Connect(function(ep)
-		TweenService:Create(boxStroke, TweenFast, { Color = Theme.AccentDim }):Play()
+		TweenService:Create(boxStroke, TweenFast, { Color = Theme.AccentDim, Thickness = 1 }):Play()
 		local val = Box.Text
 		if Options.NumericOnly then
 			local n = tonumber(val:match("%d+"))
@@ -965,12 +1392,37 @@ function UILib.CreateTextInput(Parent, Options)
 		if Options.OnSubmit then Options.OnSubmit(val) end
 	end)
 
+	if Options.MaxLength then
+		Box:GetPropertyChangedSignal("Text"):Connect(function()
+			if #Box.Text > Options.MaxLength then
+				Box.Text = string.sub(Box.Text, 1, Options.MaxLength)
+			end
+		end)
+	end
+
 	Row.MouseEnter:Connect(function()
-		TweenService:Create(Row, TweenFast, { BackgroundColor3 = Color3.fromRGB(32,30,24) }):Play()
+		TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Hover }):Play()
 	end)
 	Row.MouseLeave:Connect(function()
 		TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
 	end)
+	AttachTooltip(Row, Options.Tooltip)
+
+	if Options.Flag then
+		Flags[Options.Flag] = {
+			Kind = "text",
+			Get  = function() return Box.Text end,
+			Set  = function(v)
+				v = tostring(v)
+				if Options.NumericOnly then
+					local n = tonumber(v:match("%d+"))
+					v = n and tostring(n) or ""
+				end
+				Box.Text = v
+				if Options.OnSubmit then Options.OnSubmit(v) end
+			end,
+		}
+	end
 
 	return { Frame = Row, TextBox = Box, GetValue = function() return Box.Text end }
 end
@@ -984,8 +1436,11 @@ end
 --   Min        number  (default 0)
 --   Max        number  (default 100)
 --   Default    number
+--   Step       number  Snap values to this increment (optional)
 --   Format     string  string.format pattern (default "%.0f")
 --   OnChanged  function(value)
+--   Tooltip    string  Hover tooltip (optional)
+--   Flag       string  Config key for SaveConfig/LoadConfig
 --
 -- Returns: { Frame, Update(value), GetValue() }
 -- ============================================================
@@ -1001,7 +1456,7 @@ function UILib.CreateSlider(Parent, Options)
 	Row.BackgroundColor3 = Theme.Bg2
 	Row.BorderSizePixel  = 0
 	Row.Parent           = Parent
-	MakeCorner(Row, UDim.new(0, 7))
+	MakeCorner(Row, UDim.new(0, Theme.CornerRadiusSmall))
 	MakeStroke(Row, Theme.AccentDim, 1)
 
 	local LabelW = 0
@@ -1034,7 +1489,7 @@ function UILib.CreateSlider(Parent, Options)
 	local Track = Instance.new("Frame", Row)
 	Track.Size             = UDim2.new(1, trackW, 0, 4)
 	Track.Position         = UDim2.new(0, trackX, 0.5, -2)
-	Track.BackgroundColor3 = Color3.fromRGB(38, 34, 26)
+	Track.BackgroundColor3 = Theme.ToggleOff
 	Track.BorderSizePixel  = 0
 	MakeCorner(Track, UDim.new(1, 0))
 
@@ -1043,6 +1498,7 @@ function UILib.CreateSlider(Parent, Options)
 	Fill.BackgroundColor3 = Theme.Accent
 	Fill.BorderSizePixel  = 0
 	MakeCorner(Fill, UDim.new(1, 0))
+	MakeSheen(Fill, 0.20)
 
 	local Knob = Instance.new("Frame", Track)
 	Knob.Size             = UDim2.new(0, 12, 0, 12)
@@ -1052,7 +1508,12 @@ function UILib.CreateSlider(Parent, Options)
 	Knob.BorderSizePixel  = 0
 	MakeCorner(Knob, UDim.new(1, 0))
 
+	local step = Options.Step
+
 	local function Update(val)
+		if step and step > 0 then
+			val = Min + math.floor((val - Min) / step + 0.5) * step
+		end
 		val = math.clamp(val, Min, Max)
 		cur = val
 		ValLbl.Text = string.format(fmt, val)
@@ -1068,17 +1529,21 @@ function UILib.CreateSlider(Parent, Options)
 		if inp.UserInputType == Enum.UserInputType.MouseButton1
 		or inp.UserInputType == Enum.UserInputType.Touch then
 			dragging = true
+			TweenService:Create(Knob, TweenSpring, { Size = UDim2.new(0, 15, 0, 15) }):Play()
 			local x = inp.Position.X
 			Update(Min + ((x - Track.AbsolutePosition.X) / Track.AbsoluteSize.X) * (Max - Min))
 		end
 	end)
-	UserInputService.InputEnded:Connect(function(inp)
+	ConnectScoped(Row, UserInputService.InputEnded, function(inp)
 		if inp.UserInputType == Enum.UserInputType.MouseButton1
 		or inp.UserInputType == Enum.UserInputType.Touch then
+			if dragging then
+				TweenService:Create(Knob, TweenFast, { Size = UDim2.new(0, 12, 0, 12) }):Play()
+			end
 			dragging = false
 		end
 	end)
-	UserInputService.InputChanged:Connect(function(inp)
+	ConnectScoped(Row, UserInputService.InputChanged, function(inp)
 		if dragging and (inp.UserInputType == Enum.UserInputType.MouseMovement
 		or inp.UserInputType == Enum.UserInputType.Touch) then
 			local x = inp.Position.X
@@ -1087,17 +1552,26 @@ function UILib.CreateSlider(Parent, Options)
 	end)
 
 	Row.MouseEnter:Connect(function()
-		TweenService:Create(Row, TweenFast, { BackgroundColor3 = Color3.fromRGB(32,30,24) }):Play()
+		TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Hover }):Play()
 	end)
 	Row.MouseLeave:Connect(function()
 		TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
 	end)
+	AttachTooltip(Row, Options.Tooltip)
+
+	if Options.Flag then
+		Flags[Options.Flag] = {
+			Kind = "number",
+			Get  = function() return cur end,
+			Set  = function(val) if type(val) == "number" then Update(val) end end,
+		}
+	end
 
 	return { Frame = Row, Update = Update, GetValue = function() return cur end }
 end
 
 -- ============================================================
--- CreateDropdown / multi-line text input list
+-- CreateInputList / multi-line text input list
 -- A labeled header with a scrollable list of text boxes.
 --
 -- Options:
@@ -1107,6 +1581,7 @@ end
 --   Placeholder string    Placeholder for each box (or function(i))
 --   OnChanged   function(index, value)
 --   Height      number    Scroll area height (default 120)
+--   Flag        string    Config key for SaveConfig/LoadConfig
 --
 -- Returns:
 --   { Frame, GetValues(), SetValue(i, text) }
@@ -1128,7 +1603,7 @@ function UILib.CreateInputList(Parent, Options)
 	Card.BorderSizePixel  = 0
 	Card.ClipsDescendants = true
 	Card.Parent           = Parent
-	MakeCorner(Card, UDim.new(0, 7))
+	MakeCorner(Card, UDim.new(0, Theme.CornerRadiusSmall))
 	MakeStroke(Card, Theme.AccentDim, 1)
 
 	-- Header
@@ -1215,10 +1690,10 @@ function UILib.CreateInputList(Parent, Options)
 		TB.Text               = values[i]
 
 		TB.Focused:Connect(function()
-			TweenService:Create(slotStroke, TweenFast, { Color = Theme.Accent }):Play()
+			TweenService:Create(slotStroke, TweenFast, { Color = Theme.Accent, Thickness = 1.5 }):Play()
 		end)
 		TB.FocusLost:Connect(function()
-			TweenService:Create(slotStroke, TweenFast, { Color = Theme.AccentDim }):Play()
+			TweenService:Create(slotStroke, TweenFast, { Color = Theme.AccentDim, Thickness = 1 }):Play()
 			values[i] = TB.Text
 			if Options.OnChanged then Options.OnChanged(i, TB.Text) end
 		end)
@@ -1227,6 +1702,23 @@ function UILib.CreateInputList(Parent, Options)
 		end)
 
 		boxes[i] = TB
+	end
+
+	if Options.Flag then
+		Flags[Options.Flag] = {
+			Kind = "table",
+			Get  = function() return values end,
+			Set  = function(t)
+				if type(t) ~= "table" then return end
+				for i = 1, count do
+					if t[i] ~= nil then
+						values[i] = tostring(t[i])
+						if boxes[i] then boxes[i].Text = values[i] end
+						if Options.OnChanged then Options.OnChanged(i, values[i]) end
+					end
+				end
+			end,
+		}
 	end
 
 	return {
@@ -1245,9 +1737,12 @@ end
 --
 -- Options:
 --   Height    number   Scroll area height (default 200)
+--   MaxLines  number   Drop the oldest entries beyond this count
+--                      (optional — unlimited when omitted)
 --
 -- Returns:
---   { Frame, Log(msg), Clear() }
+--   { Frame, Log(msg, color?), Clear() }
+--   Log's optional color tints that entry (e.g. red for errors).
 -- ============================================================
 function UILib.CreateStatusLog(Parent, Options)
 	Options = Options or {}
@@ -1292,7 +1787,10 @@ function UILib.CreateStatusLog(Parent, Options)
 	ClearBtn.Text                   = "Clear Log"
 	ClearBtn.AutoButtonColor        = false
 
-	local function Log(msg)
+	local entries  = {}
+	local maxLines = Options.MaxLines
+
+	local function Log(msg, color)
 		local t = (os and os.date) and os.date("%H:%M:%S") or "??"
 		local entry = "[" .. t .. "] " .. msg
 		local lbl = Instance.new("TextLabel", Scroll)
@@ -1301,10 +1799,17 @@ function UILib.CreateStatusLog(Parent, Options)
 		lbl.BackgroundTransparency = 1
 		lbl.Font                   = Enum.Font.Code
 		lbl.TextSize               = 10
-		lbl.TextColor3             = Theme.TextPrimary
+		lbl.TextColor3             = color or Theme.TextPrimary
 		lbl.TextXAlignment         = Enum.TextXAlignment.Left
 		lbl.TextWrapped            = true
 		lbl.Text                   = entry
+		table.insert(entries, lbl)
+		if maxLines then
+			while #entries > maxLines do
+				local oldest = table.remove(entries, 1)
+				if oldest then oldest:Destroy() end
+			end
+		end
 		task.defer(function()
 			Scroll.CanvasPosition = Vector2.new(0, math.huge)
 		end)
@@ -1314,11 +1819,12 @@ function UILib.CreateStatusLog(Parent, Options)
 		for _, c in ipairs(Scroll:GetChildren()) do
 			if c:IsA("TextLabel") then c:Destroy() end
 		end
+		entries = {}
 	end
 
 	ClearBtn.MouseButton1Click:Connect(Clear)
 	ClearBtn.MouseEnter:Connect(function()
-		TweenService:Create(ClearRow, TweenFast, { BackgroundColor3 = Color3.fromRGB(32,30,24) }):Play()
+		TweenService:Create(ClearRow, TweenFast, { BackgroundColor3 = Theme.Hover }):Play()
 	end)
 	ClearBtn.MouseLeave:Connect(function()
 		TweenService:Create(ClearRow, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
@@ -1329,16 +1835,55 @@ end
 
 -- ============================================================
 -- CreateDivider
--- A thin 1px horizontal line.
+-- A thin 1px horizontal line. Pass Options.Text for a labeled
+-- divider (line with a small centered caption).
+--
+-- Options (all optional):
+--   Text   string   Centered caption
+--
+-- Returns the divider Frame.
 -- ============================================================
-function UILib.CreateDivider(Parent)
-	local d = Instance.new("Frame")
-	d.Size             = UDim2.new(1, 0, 0, 1)
-	d.BackgroundColor3 = Theme.AccentDim
-	d.BackgroundTransparency = 0.5
-	d.BorderSizePixel  = 0
-	d.Parent           = Parent
-	return d
+function UILib.CreateDivider(Parent, Options)
+	Options = Options or {}
+
+	if not Options.Text or Options.Text == "" then
+		local d = Instance.new("Frame")
+		d.Size             = UDim2.new(1, 0, 0, 1)
+		d.BackgroundColor3 = Theme.AccentDim
+		d.BackgroundTransparency = 0.5
+		d.BorderSizePixel  = 0
+		d.Parent           = Parent
+		return d
+	end
+
+	local Holder = Instance.new("Frame")
+	Holder.Size                   = UDim2.new(1, 0, 0, 14)
+	Holder.BackgroundTransparency = 1
+	Holder.BorderSizePixel        = 0
+	Holder.Parent                 = Parent
+
+	local Line = Instance.new("Frame", Holder)
+	Line.Size                   = UDim2.new(1, 0, 0, 1)
+	Line.Position               = UDim2.new(0, 0, 0.5, 0)
+	Line.BackgroundColor3       = Theme.AccentDim
+	Line.BackgroundTransparency = 0.5
+	Line.BorderSizePixel        = 0
+
+	-- The caption sits on top of the line and masks it with the panel's
+	-- surface colour, reading as "line — text — line".
+	local Cap = Instance.new("TextLabel", Holder)
+	Cap.AnchorPoint            = Vector2.new(0.5, 0.5)
+	Cap.Position               = UDim2.new(0.5, 0, 0.5, 0)
+	Cap.AutomaticSize          = Enum.AutomaticSize.XY
+	Cap.BackgroundColor3       = Theme.Bg1
+	Cap.BorderSizePixel        = 0
+	Cap.Font                   = Theme.FontMedium
+	Cap.TextSize               = Theme.CaptionSize
+	Cap.TextColor3             = Theme.TextMuted
+	Cap.Text                   = Options.Text
+	MakePadding(Cap, 8, 8, 1, 1)
+
+	return Holder
 end
 
 -- ============================================================
@@ -1347,8 +1892,9 @@ end
 -- Multiple calls stack vertically.
 --
 -- Args:
---   Title  string
---   Text   string
+--   Title     string
+--   Text      string
+--   Duration  number   Seconds before auto-dismiss (default 2.5)
 -- ============================================================
 local _notifList = {}
 local _notifSg   = nil
@@ -1374,14 +1920,14 @@ local function _repositionNotifs()
 		local f = _notifList[i]
 		if f and f.Parent then
 			local targetY = -(bottomMargin + totalY + NOTIF_H)
-			TweenService:Create(f, TweenFast,
+			TweenService:Create(f, TweenMed,
 				{ Position = UDim2.new(1, -(NOTIF_W + 12), 1, targetY) }):Play()
 			totalY = totalY + NOTIF_H + NOTIF_PAD
 		end
 	end
 end
 
-function UILib.ShowNotification(Title, Text)
+function UILib.ShowNotification(Title, Text, Duration)
 	_ensureNotifGui()
 
 	local F = Instance.new("Frame", _notifSg)
@@ -1393,6 +1939,7 @@ function UILib.ShowNotification(Title, Text)
 	F.ClipsDescendants       = true
 	MakeCorner(F, UDim.new(0, Theme.CornerRadiusSmall))
 	MakeStroke(F, Theme.Accent, 1.2)
+	MakeSheen(F, 0.10)
 
 	-- Thin accent left bar
 	local Bar = Instance.new("Frame", F)
@@ -1423,7 +1970,7 @@ function UILib.ShowNotification(Title, Text)
 	_repositionNotifs()
 
 	-- Auto-dismiss
-	task.delay(2.5, function()
+	task.delay(tonumber(Duration) or 2.5, function()
 		if not F.Parent then return end
 		-- Slide out to the right
 		TweenService:Create(F, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
@@ -1441,8 +1988,14 @@ end
 
 -- ============================================================
 -- MakeDraggable (standalone utility)
+--
+-- Options (optional third argument):
+--   ClampToScreen  bool   Keep Target inside its parent container
+--                         while dragging (default false)
 -- ============================================================
-function UILib.MakeDraggable(Handle, Target)
+function UILib.MakeDraggable(Handle, Target, Options)
+	Options = Options or {}
+	local clampToScreen = Options.ClampToScreen == true
 	local dragging, dragStart, startPos = false, nil, nil
 	Handle.InputBegan:Connect(function(inp)
 		if inp.UserInputType ~= Enum.UserInputType.MouseButton1
@@ -1454,14 +2007,26 @@ function UILib.MakeDraggable(Handle, Target)
 			if inp.UserInputState == Enum.UserInputState.End then dragging = false end
 		end)
 	end)
-	UserInputService.InputChanged:Connect(function(inp)
+	ConnectScoped(Target, UserInputService.InputChanged, function(inp)
 		if not dragging then return end
 		if inp.UserInputType ~= Enum.UserInputType.MouseMovement
 		and inp.UserInputType ~= Enum.UserInputType.Touch then return end
 		local d = inp.Position - dragStart
-		Target.Position = UDim2.new(
+		local pos = UDim2.new(
 			startPos.X.Scale, startPos.X.Offset + d.X,
 			startPos.Y.Scale, startPos.Y.Offset + d.Y)
+		if clampToScreen and Target.Parent then
+			local ok, screen = pcall(function() return Target.Parent.AbsoluteSize end)
+			if ok and screen and screen.X > 0 and screen.Y > 0 then
+				local tw, th = Target.AbsoluteSize.X, Target.AbsoluteSize.Y
+				local absX = math.clamp(pos.X.Scale * screen.X + pos.X.Offset, 0, math.max(0, screen.X - tw))
+				local absY = math.clamp(pos.Y.Scale * screen.Y + pos.Y.Offset, 0, math.max(0, screen.Y - th))
+				pos = UDim2.new(
+					pos.X.Scale, absX - pos.X.Scale * screen.X,
+					pos.Y.Scale, absY - pos.Y.Scale * screen.Y)
+			end
+		end
+		Target.Position = pos
 	end)
 end
 
@@ -1484,7 +2049,7 @@ function UILib.CreateParagraph(Parent, Options)
 	Card.BackgroundColor3  = Theme.Bg2
 	Card.BorderSizePixel   = 0
 	Card.Parent            = Parent
-	MakeCorner(Card, UDim.new(0, 7))
+	MakeCorner(Card, UDim.new(0, Theme.CornerRadiusSmall))
 	MakeStroke(Card, Theme.AccentDim, 1)
 	MakePadding(Card, 12, 12, 10, 10)
 	MakeListLayout(Card, Enum.FillDirection.Vertical, 4)
@@ -1549,7 +2114,7 @@ function UILib.CreateProgressBar(Parent, Options)
 	Row.BackgroundColor3 = Theme.Bg2
 	Row.BorderSizePixel  = 0
 	Row.Parent           = Parent
-	MakeCorner(Row, UDim.new(0, 7))
+	MakeCorner(Row, UDim.new(0, Theme.CornerRadiusSmall))
 	MakeStroke(Row, Theme.AccentDim, 1)
 	MakePadding(Row, 12, 12, 6, 8)
 
@@ -1579,7 +2144,7 @@ function UILib.CreateProgressBar(Parent, Options)
 	local Track = Instance.new("Frame", Row)
 	Track.Position         = UDim2.new(0, 0, 0, 22)
 	Track.Size             = UDim2.new(1, 0, 0, 6)
-	Track.BackgroundColor3 = Color3.fromRGB(38, 34, 26)
+	Track.BackgroundColor3 = Theme.ToggleOff
 	Track.BorderSizePixel  = 0
 	MakeCorner(Track, UDim.new(1, 0))
 
@@ -1588,6 +2153,7 @@ function UILib.CreateProgressBar(Parent, Options)
 	Fill.BackgroundColor3 = Theme.Accent
 	Fill.BorderSizePixel  = 0
 	MakeCorner(Fill, UDim.new(1, 0))
+	MakeSheen(Fill, 0.20)
 
 	local function Update(val, instant)
 		val = math.clamp(val, Min, Max)
@@ -1603,7 +2169,12 @@ function UILib.CreateProgressBar(Parent, Options)
 	end
 	Update(cur, true)
 
-	return { Frame = Row, Update = Update, GetValue = function() return cur end }
+	return {
+		Frame    = Row,
+		Update   = Update,
+		GetValue = function() return cur end,
+		SetLabel = function(t) Lbl.Text = t or "" end,
+	}
 end
 
 -- ============================================================
@@ -1707,6 +2278,8 @@ end
 --   Options    table    Array of option strings
 --   Default    number   Initially selected index (default 1)
 --   OnChanged  function(index, value)
+--   Tooltip    string   Hover tooltip (optional)
+--   Flag       string   Config key for SaveConfig/LoadConfig
 --
 -- Returns: { Frame, SetValue(index), GetValue() }
 -- ============================================================
@@ -1721,7 +2294,7 @@ function UILib.CreateGroup(Parent, Options)
 	Card.BackgroundColor3  = Theme.Bg2
 	Card.BorderSizePixel   = 0
 	Card.Parent            = Parent
-	MakeCorner(Card, UDim.new(0, 7))
+	MakeCorner(Card, UDim.new(0, Theme.CornerRadiusSmall))
 	MakeStroke(Card, Theme.AccentDim, 1)
 	MakePadding(Card, 8, 8, 8, 8)
 	MakeListLayout(Card, Enum.FillDirection.Vertical, 2)
@@ -1794,7 +2367,7 @@ function UILib.CreateGroup(Parent, Options)
 			if Options.OnChanged then Options.OnChanged(i, text) end
 		end)
 		Row.MouseEnter:Connect(function()
-			TweenService:Create(Row, TweenFast, { BackgroundColor3 = Color3.fromRGB(32,30,24) }):Play()
+			TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Hover }):Play()
 			Row.BackgroundTransparency = 0
 		end)
 		Row.MouseLeave:Connect(function()
@@ -1804,6 +2377,21 @@ function UILib.CreateGroup(Parent, Options)
 	end
 
 	refresh()
+	AttachTooltip(Card, Options.Tooltip)
+
+	if Options.Flag then
+		Flags[Options.Flag] = {
+			Kind = "number",
+			Get  = function() return current end,
+			Set  = function(i)
+				if type(i) == "number" and items[i] then
+					current = i
+					refresh()
+					if Options.OnChanged then Options.OnChanged(i, items[i]) end
+				end
+			end,
+		}
+	end
 
 	return {
 		Frame    = Card,
@@ -1823,8 +2411,11 @@ end
 --   Multi        bool      Allow multiple selections   (default false)
 --   Placeholder  string    Shown when nothing is selected
 --   OnChanged    function(value)   -- value is a string, or an array if Multi
+--   Tooltip      string    Hover tooltip (optional)
+--   Flag         string    Config key for SaveConfig/LoadConfig
 --
--- Returns: { Frame, SetOpen(bool), GetValue() }
+-- Returns: { Frame, SetOpen(bool), GetValue(),
+--            SetItems(items, keepSelection) }
 -- ============================================================
 function UILib.CreateDropdown(Parent, Options)
 	Options = Options or {}
@@ -1847,7 +2438,7 @@ function UILib.CreateDropdown(Parent, Options)
 	Card.BorderSizePixel   = 0
 	Card.ClipsDescendants  = true
 	Card.Parent            = Parent
-	MakeCorner(Card, UDim.new(0, 7))
+	MakeCorner(Card, UDim.new(0, Theme.CornerRadiusSmall))
 	MakeStroke(Card, Theme.AccentDim, 1)
 	local CardLayout = Instance.new("UIListLayout", Card)
 	CardLayout.SortOrder = Enum.SortOrder.LayoutOrder
@@ -1934,10 +2525,18 @@ function UILib.CreateDropdown(Parent, Options)
 	local function setOpen(open)
 		isOpen = open
 		List.Visible = open
-		Chevron.Text = open and "▲" or "▼"
+		TweenService:Create(Chevron, TweenMed,
+			{ Rotation   = open and 180 or 0,
+			  TextColor3 = open and Theme.Accent or Theme.AccentDim }):Play()
+		if open then
+			OverlayOpened(Card, function() setOpen(false) end)
+		else
+			OverlayClosed(Card)
+		end
 	end
+	Card.Destroying:Connect(function() OverlayClosed(Card) end)
 
-	for i, text in ipairs(items) do
+	local function buildRow(i, text)
 		local Row = Instance.new("TextButton", List)
 		Row.Size                   = UDim2.new(1, 0, 0, 26)
 		Row.LayoutOrder            = i
@@ -1973,7 +2572,7 @@ function UILib.CreateDropdown(Parent, Options)
 		RLbl.TextXAlignment         = Enum.TextXAlignment.Left
 		RLbl.Text                   = text
 
-		optRows[text] = { Dot = Dot, Ring = ring, Lbl = RLbl }
+		optRows[text] = { Row = Row, Dot = Dot, Ring = ring, Lbl = RLbl }
 
 		Row.MouseButton1Click:Connect(function()
 			if multi then
@@ -1996,7 +2595,7 @@ function UILib.CreateDropdown(Parent, Options)
 			if not multi then setOpen(false) end
 		end)
 		Row.MouseEnter:Connect(function()
-			TweenService:Create(Row, TweenFast, { BackgroundColor3 = Color3.fromRGB(32,30,24) }):Play()
+			TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Hover }):Play()
 			Row.BackgroundTransparency = 0
 		end)
 		Row.MouseLeave:Connect(function()
@@ -2005,23 +2604,74 @@ function UILib.CreateDropdown(Parent, Options)
 		end)
 	end
 
+	local function buildRows()
+		for _, row in pairs(optRows) do
+			if row.Row then row.Row:Destroy() end
+		end
+		optRows = {}
+		for i, text in ipairs(items) do
+			buildRow(i, text)
+		end
+	end
+
+	buildRows()
 	refreshLabel()
+	AttachTooltip(Head, Options.Tooltip)
 
 	Head.MouseButton1Click:Connect(function()
 		setOpen(not isOpen)
 	end)
 
+	local function getValue()
+		if multi then
+			local out = {}
+			for _, val in ipairs(items) do if selected[val] then table.insert(out, val) end end
+			return out
+		end
+		for _, val in ipairs(items) do if selected[val] then return val end end
+		return nil
+	end
+
+	if Options.Flag then
+		Flags[Options.Flag] = {
+			Kind = multi and "table" or "value",
+			Get  = getValue,
+			Set  = function(v)
+				selected = {}
+				if multi then
+					if type(v) == "table" then
+						for _, val in ipairs(v) do selected[val] = true end
+					end
+				else
+					if type(v) == "number" then v = items[v] end
+					if v ~= nil then selected[v] = true end
+				end
+				refreshRows()
+				refreshLabel()
+				if Options.OnChanged then Options.OnChanged(getValue()) end
+			end,
+		}
+	end
+
 	return {
 		Frame    = Card,
 		SetOpen  = setOpen,
-		GetValue = function()
-			if multi then
-				local out = {}
-				for _, val in ipairs(items) do if selected[val] then table.insert(out, val) end end
-				return out
+		GetValue = getValue,
+		-- Replace the option list. Selections for values that still
+		-- exist are kept when keepSelection is true.
+		SetItems = function(newItems, keepSelection)
+			items = newItems or {}
+			if keepSelection then
+				local lookup = {}
+				for _, val in ipairs(items) do lookup[val] = true end
+				for val in pairs(selected) do
+					if not lookup[val] then selected[val] = nil end
+				end
+			else
+				selected = {}
 			end
-			for _, val in ipairs(items) do if selected[val] then return val end end
-			return nil
+			buildRows()
+			refreshLabel()
 		end,
 	}
 end
@@ -2035,6 +2685,8 @@ end
 --   Label      string
 --   Default    Enum.KeyCode | string   (e.g. Enum.KeyCode.E or "E")
 --   OnChanged  function(keyCode)
+--   Tooltip    string   Hover tooltip (optional)
+--   Flag       string   Config key for SaveConfig/LoadConfig
 --
 -- Returns: { Frame, Set(keyCode), GetValue() }
 -- ============================================================
@@ -2050,7 +2702,7 @@ function UILib.CreateKeybind(Parent, Options)
 	Row.BackgroundColor3 = Theme.Bg2
 	Row.BorderSizePixel  = 0
 	Row.Parent           = Parent
-	MakeCorner(Row, UDim.new(0, 7))
+	MakeCorner(Row, UDim.new(0, Theme.CornerRadiusSmall))
 	MakeStroke(Row, Theme.AccentDim, 1)
 
 	local Lbl = Instance.new("TextLabel", Row)
@@ -2082,15 +2734,19 @@ function UILib.CreateKeybind(Parent, Options)
 
 	local function stopListening()
 		listening = false
-		TweenService:Create(keyStroke, TweenFast, { Color = Theme.AccentDim }):Play()
+		TweenService:Create(keyStroke, TweenFast, { Color = Theme.AccentDim, Thickness = 1 }):Play()
 		if conn then conn:Disconnect(); conn = nil end
 	end
+	-- If the row dies while capturing, drop the global InputBegan hook
+	Row.Destroying:Connect(function()
+		if conn then conn:Disconnect(); conn = nil end
+	end)
 
 	KeyBtn.MouseButton1Click:Connect(function()
 		if listening then stopListening(); return end
 		listening = true
 		KeyBtn.Text = "..."
-		TweenService:Create(keyStroke, TweenFast, { Color = Theme.Accent }):Play()
+		TweenService:Create(keyStroke, TweenFast, { Color = Theme.Accent, Thickness = 1.5 }):Play()
 		conn = UserInputService.InputBegan:Connect(function(inp)
 			if inp.UserInputType == Enum.UserInputType.Keyboard then
 				current = inp.KeyCode
@@ -2102,11 +2758,31 @@ function UILib.CreateKeybind(Parent, Options)
 	end)
 
 	Row.MouseEnter:Connect(function()
-		TweenService:Create(Row, TweenFast, { BackgroundColor3 = Color3.fromRGB(32,30,24) }):Play()
+		TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Hover }):Play()
 	end)
 	Row.MouseLeave:Connect(function()
 		TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
 	end)
+	AttachTooltip(Row, Options.Tooltip)
+
+	if Options.Flag then
+		Flags[Options.Flag] = {
+			Kind = "keybind",
+			Get  = function() return current and current.Name or nil end,
+			Set  = function(v)
+				local kc = v
+				if type(kc) == "string" then
+					local ok, parsed = pcall(function() return Enum.KeyCode[kc] end)
+					kc = ok and parsed or nil
+				end
+				if typeof(kc) == "EnumItem" then
+					current = kc
+					KeyBtn.Text = kc.Name
+					if Options.OnChanged then Options.OnChanged(current) end
+				end
+			end,
+		}
+	end
 
 	return {
 		Frame = Row,
@@ -2143,7 +2819,7 @@ function UILib.CreateCode(Parent, Options)
 	Card.BorderSizePixel   = 0
 	Card.ClipsDescendants  = true
 	Card.Parent            = Parent
-	MakeCorner(Card, UDim.new(0, 7))
+	MakeCorner(Card, UDim.new(0, Theme.CornerRadiusSmall))
 	MakeStroke(Card, Theme.AccentDim, 1)
 	local CardLayout = Instance.new("UIListLayout", Card)
 	CardLayout.SortOrder = Enum.SortOrder.LayoutOrder
@@ -2176,6 +2852,13 @@ function UILib.CreateCode(Parent, Options)
 		CopyBtn.Text                   = "Copy"
 		CopyBtn.AutoButtonColor        = false
 		MakeCorner(CopyBtn, UDim.new(0, 4))
+
+		CopyBtn.MouseEnter:Connect(function()
+			TweenService:Create(CopyBtn, TweenFast, { TextColor3 = Theme.Accent }):Play()
+		end)
+		CopyBtn.MouseLeave:Connect(function()
+			TweenService:Create(CopyBtn, TweenFast, { TextColor3 = Theme.TextMuted }):Play()
+		end)
 
 		CopyBtn.MouseButton1Click:Connect(function()
 			if setclipboard then
@@ -2243,7 +2926,7 @@ function UILib.CreateImage(Parent, Options)
 	Card.BorderSizePixel   = 0
 	Card.ClipsDescendants  = true
 	Card.Parent            = Parent
-	MakeCorner(Card, UDim.new(0, 7))
+	MakeCorner(Card, UDim.new(0, Theme.CornerRadiusSmall))
 	MakeStroke(Card, Theme.AccentDim, 1)
 
 	local Img = Instance.new("ImageLabel", Card)
@@ -2282,7 +2965,7 @@ function UILib.CreateVideo(Parent, Options)
 	Card.BorderSizePixel   = 0
 	Card.ClipsDescendants  = true
 	Card.Parent            = Parent
-	MakeCorner(Card, UDim.new(0, 7))
+	MakeCorner(Card, UDim.new(0, Theme.CornerRadiusSmall))
 	MakeStroke(Card, Theme.AccentDim, 1)
 
 	local Vid = Instance.new("VideoFrame", Card)
@@ -2349,7 +3032,7 @@ function UILib.CreateViewport(Parent, Options)
 	Card.BorderSizePixel   = 0
 	Card.ClipsDescendants  = true
 	Card.Parent            = Parent
-	MakeCorner(Card, UDim.new(0, 7))
+	MakeCorner(Card, UDim.new(0, Theme.CornerRadiusSmall))
 	MakeStroke(Card, Theme.AccentDim, 1)
 
 	local VP = Instance.new("ViewportFrame", Card)
@@ -2409,6 +3092,8 @@ end
 --   Label      string
 --   Default    Color3    (default white)
 --   OnChanged  function(color3)
+--   Tooltip    string    Hover tooltip (optional)
+--   Flag       string    Config key for SaveConfig/LoadConfig
 --
 -- Returns: { Frame, SetOpen(bool), SetValue(color3), GetValue() }
 -- ============================================================
@@ -2424,7 +3109,7 @@ function UILib.CreateColorPicker(Parent, Options)
 	Card.BorderSizePixel   = 0
 	Card.ClipsDescendants  = true
 	Card.Parent            = Parent
-	MakeCorner(Card, UDim.new(0, 7))
+	MakeCorner(Card, UDim.new(0, Theme.CornerRadiusSmall))
 	MakeStroke(Card, Theme.AccentDim, 1)
 	local CardLayout = Instance.new("UIListLayout", Card)
 	CardLayout.SortOrder = Enum.SortOrder.LayoutOrder
@@ -2539,7 +3224,11 @@ function UILib.CreateColorPicker(Parent, Options)
 	HexBox.TextColor3        = Theme.AccentSec
 	HexBox.ClearTextOnFocus  = false
 	MakeCorner(HexBox, UDim.new(0, 5))
-	MakeStroke(HexBox, Theme.AccentDim, 1)
+	local hexStroke = MakeStroke(HexBox, Theme.AccentDim, 1)
+
+	HexBox.Focused:Connect(function()
+		TweenService:Create(hexStroke, TweenFast, { Color = Theme.Accent, Thickness = 1.5 }):Play()
+	end)
 
 	local function updateFromHSV(fireEvent)
 		current = Color3.fromHSV(h, s, v)
@@ -2583,18 +3272,19 @@ function UILib.CreateColorPicker(Parent, Options)
 			jumpHue(inp.Position)
 		end
 	end)
-	UserInputService.InputEnded:Connect(function(inp)
+	ConnectScoped(Card, UserInputService.InputEnded, function(inp)
 		if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
 			draggingSV, draggingHue = false, false
 		end
 	end)
-	UserInputService.InputChanged:Connect(function(inp)
+	ConnectScoped(Card, UserInputService.InputChanged, function(inp)
 		if inp.UserInputType ~= Enum.UserInputType.MouseMovement and inp.UserInputType ~= Enum.UserInputType.Touch then return end
 		if draggingSV then jumpSV(inp.Position)
 		elseif draggingHue then jumpHue(inp.Position) end
 	end)
 
 	HexBox.FocusLost:Connect(function()
+		TweenService:Create(hexStroke, TweenFast, { Color = Theme.AccentDim, Thickness = 1 }):Play()
 		local hex = string.gsub(HexBox.Text, "#", "")
 		if #hex == 6 and string.match(hex, "^%x+$") then
 			local r = tonumber(string.sub(hex, 1, 2), 16) / 255
@@ -2611,11 +3301,31 @@ function UILib.CreateColorPicker(Parent, Options)
 	local function setOpen(open)
 		isOpen = open
 		Panel.Visible = open
+		if open then
+			OverlayOpened(Card, function() setOpen(false) end)
+		else
+			OverlayClosed(Card)
+		end
 	end
+	Card.Destroying:Connect(function() OverlayClosed(Card) end)
 
 	Head.MouseButton1Click:Connect(function()
 		setOpen(not isOpen)
 	end)
+	AttachTooltip(Head, Options.Tooltip)
+
+	if Options.Flag then
+		Flags[Options.Flag] = {
+			Kind = "color",
+			Get  = function() return current end,
+			Set  = function(c)
+				if typeof(c) == "Color3" then
+					h, s, v = Color3.toHSV(c)
+					updateFromHSV(true)
+				end
+			end,
+		}
+	end
 
 	return {
 		Frame    = Card,
@@ -2652,6 +3362,83 @@ function UILib.Init(Options)
 		DefaultParent = Options.Parent
 	end
 	return UILib
+end
+
+-- ============================================================
+-- SaveConfig / LoadConfig
+-- Optional persistence for component values, backed by the
+-- executor's writefile/readfile. Both are safe no-ops (returning
+-- false + a reason) when the executor doesn't support file APIs,
+-- so scripts that never call them — or run without file access —
+-- are completely unaffected.
+--
+-- To opt a component in, give it a Flag key at creation:
+--   UILib.CreateToggle(tab, { Label = "ESP", Flag = "esp", ... })
+-- Supported: Toggle (bool), Slider (number), TextInput (string),
+-- Dropdown (string / array if Multi), Keybind (key name string),
+-- ColorPicker (RGB table), Group (index), InputList (array).
+--
+--   UILib.SaveConfig(name)  → true  |  false, err
+--   UILib.LoadConfig(name)  → true  |  false, err
+--
+-- `name` defaults to "UILibConfig"; files are stored as
+-- "<name>.json" in the executor's workspace folder. Loading
+-- applies each saved value through the component's setter and
+-- fires its OnChanged/OnSubmit so consuming scripts stay in sync.
+-- ============================================================
+local function configFileName(name)
+	return tostring(name or "UILibConfig") .. ".json"
+end
+
+function UILib.SaveConfig(name)
+	if type(writefile) ~= "function" then
+		return false, "writefile is not supported by this executor"
+	end
+	local data = {}
+	for flag, entry in pairs(Flags) do
+		local ok, v = pcall(entry.Get)
+		if ok and v ~= nil then
+			if entry.Kind == "color" then
+				v = {
+					R = math.floor(v.R * 255 + 0.5),
+					G = math.floor(v.G * 255 + 0.5),
+					B = math.floor(v.B * 255 + 0.5),
+				}
+			end
+			data[flag] = v
+		end
+	end
+	local okEncode, json = pcall(HttpService.JSONEncode, HttpService, data)
+	if not okEncode then return false, json end
+	local okWrite, err = pcall(writefile, configFileName(name), json)
+	if not okWrite then return false, err end
+	return true
+end
+
+function UILib.LoadConfig(name)
+	if type(readfile) ~= "function" then
+		return false, "readfile is not supported by this executor"
+	end
+	local file = configFileName(name)
+	if type(isfile) == "function" and not isfile(file) then
+		return false, "no such config: " .. file
+	end
+	local okRead, json = pcall(readfile, file)
+	if not okRead then return false, json end
+	local okDecode, data = pcall(HttpService.JSONDecode, HttpService, json)
+	if not okDecode or type(data) ~= "table" then
+		return false, "invalid config file: " .. file
+	end
+	for flag, v in pairs(data) do
+		local entry = Flags[flag]
+		if entry then
+			if entry.Kind == "color" and type(v) == "table" then
+				v = Color3.fromRGB(v.R or 255, v.G or 255, v.B or 255)
+			end
+			pcall(entry.Set, v)
+		end
+	end
+	return true
 end
 
 -- ============================================================
@@ -2698,7 +3485,7 @@ function UILib.CreateCardList(Parent, Options)
 	Wrapper.BorderSizePixel  = 0
 	Wrapper.ClipsDescendants = true
 	Wrapper.Parent           = Parent
-	MakeCorner(Wrapper, UDim.new(0, 7))
+	MakeCorner(Wrapper, UDim.new(0, Theme.CornerRadiusSmall))
 	MakeStroke(Wrapper, Theme.AccentDim, 1)
 
 	-- ── ScrollingFrame ────────────────────────────────────────
@@ -2876,7 +3663,7 @@ function UILib.CreateCardList(Parent, Options)
 		hf.Parent                 = Card
 		MakeCorner(hf, UDim.new(0, 6))
 		Card.MouseEnter:Connect(function()
-			TweenService:Create(hf, TweenFast, { BackgroundColor3 = Color3.fromRGB(32,30,24) }):Play()
+			TweenService:Create(hf, TweenFast, { BackgroundColor3 = Theme.Hover }):Play()
 			hf.BackgroundTransparency = 0
 		end)
 		Card.MouseLeave:Connect(function()
@@ -2962,12 +3749,133 @@ function UILib.CreateCardList(Parent, Options)
 end
 
 -- ============================================================
+-- CreateLabel
+-- A lightweight single-line text row — for captions, hints and
+-- section lead-ins that don't need a full Paragraph card.
+--
+-- Options:
+--   Text       string
+--   Color      Color3                    (default Theme.TextMuted)
+--   TextSize   number                    (default Theme.SmallSize)
+--   Font       Enum.Font                 (default Theme.FontRegular)
+--   Alignment  Enum.TextXAlignment       (default Left)
+--   Height     number                    (default 18)
+--
+-- Returns: { Frame, Label, SetText(text) }
+-- ============================================================
+function UILib.CreateLabel(Parent, Options)
+	Options = Options or {}
+
+	local Lbl = Instance.new("TextLabel")
+	Lbl.Size                   = UDim2.new(1, 0, 0, Options.Height or 18)
+	Lbl.BackgroundTransparency = 1
+	Lbl.BorderSizePixel        = 0
+	Lbl.Font                   = Options.Font or Theme.FontRegular
+	Lbl.TextSize               = Options.TextSize or Theme.SmallSize
+	Lbl.TextColor3             = Options.Color or Theme.TextMuted
+	Lbl.TextXAlignment         = Options.Alignment or Enum.TextXAlignment.Left
+	Lbl.TextTruncate           = Enum.TextTruncate.AtEnd
+	Lbl.Text                   = Options.Text or ""
+	Lbl.Parent                 = Parent
+
+	return {
+		Frame   = Lbl,
+		Label   = Lbl,
+		SetText = function(t) Lbl.Text = t or "" end,
+	}
+end
+
+-- ============================================================
+-- CreateKeyValue
+-- A compact stat row: muted key on the left, highlighted value
+-- on the right. Ideal for live status readouts.
+--
+-- Options:
+--   Label      string
+--   Value      string | number   Initial value (default "-")
+--   Tooltip    string            Hover tooltip (optional)
+--
+-- Returns: { Frame, SetValue(v), SetLabel(t), GetValue() }
+-- ============================================================
+function UILib.CreateKeyValue(Parent, Options)
+	Options = Options or {}
+	local value = Options.Value ~= nil and tostring(Options.Value) or "-"
+
+	local Row = Instance.new("Frame")
+	Row.Size             = UDim2.new(1, 0, 0, 26)
+	Row.BackgroundColor3 = Theme.Bg2
+	Row.BorderSizePixel  = 0
+	Row.Parent           = Parent
+	MakeCorner(Row, UDim.new(0, Theme.CornerRadiusXs))
+	MakeStroke(Row, Theme.AccentDim, 1)
+
+	local KeyLbl = Instance.new("TextLabel", Row)
+	KeyLbl.Size                   = UDim2.new(0.5, -14, 1, 0)
+	KeyLbl.Position               = UDim2.new(0, 12, 0, 0)
+	KeyLbl.BackgroundTransparency = 1
+	KeyLbl.Font                   = Theme.FontRegular
+	KeyLbl.TextSize               = Theme.SmallSize
+	KeyLbl.TextColor3             = Theme.TextMuted
+	KeyLbl.TextXAlignment         = Enum.TextXAlignment.Left
+	KeyLbl.TextTruncate           = Enum.TextTruncate.AtEnd
+	KeyLbl.Text                   = Options.Label or ""
+
+	local ValLbl = Instance.new("TextLabel", Row)
+	ValLbl.Size                   = UDim2.new(0.5, -14, 1, 0)
+	ValLbl.Position               = UDim2.new(0.5, 2, 0, 0)
+	ValLbl.BackgroundTransparency = 1
+	ValLbl.Font                   = Theme.FontMedium
+	ValLbl.TextSize               = Theme.SmallSize
+	ValLbl.TextColor3             = Theme.AccentSec
+	ValLbl.TextXAlignment         = Enum.TextXAlignment.Right
+	ValLbl.TextTruncate           = Enum.TextTruncate.AtEnd
+	ValLbl.Text                   = value
+
+	AttachTooltip(Row, Options.Tooltip)
+
+	return {
+		Frame    = Row,
+		SetValue = function(v)
+			value = tostring(v)
+			ValLbl.Text = value
+		end,
+		SetLabel = function(t) KeyLbl.Text = t or "" end,
+		GetValue = function() return value end,
+	}
+end
+
+-- ============================================================
+-- Unload
+-- Destroys every panel, notification and tooltip the library has
+-- created and clears internal state. Safe to call multiple times.
+-- ============================================================
+function UILib.Unload()
+	for _, g in ipairs(_allGuis) do
+		if g and g.Parent then g:Destroy() end
+	end
+	_allGuis = {}
+	if _notifSg then _notifSg:Destroy(); _notifSg = nil end
+	_notifList = {}
+	if _tooltipSg then _tooltipSg:Destroy(); _tooltipSg = nil end
+	_tooltipFrame, _tooltipLbl = nil, nil
+	if _overlayWatch then _overlayWatch:Disconnect(); _overlayWatch = nil end
+	_openOverlay = nil
+	for k in pairs(Flags) do Flags[k] = nil end
+end
+
+-- ============================================================
 -- Convenience lowercase aliases
 -- Exposes each component under a short name in addition to the
 -- primary CreateXxx API, without altering how the components
 -- themselves are implemented.
 -- ============================================================
 UILib.init        = UILib.Init
+UILib.unload      = UILib.Unload
+UILib.saveconfig  = UILib.SaveConfig
+UILib.loadconfig  = UILib.LoadConfig
+UILib.notify      = UILib.ShowNotification
+UILib.label       = UILib.CreateLabel
+UILib.keyvalue    = UILib.CreateKeyValue
 UILib.button      = UILib.CreateButton
 UILib.code        = UILib.CreateCode
 UILib.colorpicker = UILib.CreateColorPicker
