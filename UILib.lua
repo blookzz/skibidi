@@ -1445,7 +1445,7 @@ function UILib.CreatePanel(Options)
 	-- Discord button (optional, off by default)
 	-- Options.Discord = true enables it. Clicking copies the invite link
 	-- to the clipboard via setclipboard (when the executor supports it).
-	local DISCORD_INVITE  = "https://discord.gg/rNvAU6cjVB"
+	local DISCORD_INVITE  = "https://discord.gg/vonhub"
 	local DISCORD_ICON_ID = "rbxassetid://94434236999817" -- simple Discord mark; swap if it doesn't render for you
 
 	local DiscordBtn
