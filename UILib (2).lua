@@ -645,7 +645,7 @@ local function MakeInnerGlow(target, color, spread, transparency)
 		local st = Instance.new("UIStroke")
 		-- Slightly thicker than the gap so neighbouring rings overlap and
 		-- read as one falloff rather than three visible bands.
-		st.Thickness    = step * 1.6
+		st.Thickness    = step * 1.2
 		st.Color        = color or Theme.Accent
 		st.LineJoinMode = Enum.LineJoinMode.Round
 		st.Parent       = R
@@ -1332,17 +1332,34 @@ function UILib.CreatePanel(Options)
 	-- Places the pill immediately after the *rendered* title text, and
 	-- keeps the title label's width honest so a long title truncates
 	-- instead of running under the pill or the header buttons.
+	-- TextService measures a hair short of what the font actually renders,
+	-- and the label used to be sized to exactly that number. Overflowing by
+	-- even a sub-pixel arms AtEnd truncation, which then has to free room
+	-- for the ellipsis itself — and "…" is wider than the character it
+	-- replaces, so it ate a second one too. That is how a 420px header
+	-- managed to render "UILib" as "UIL…".
+	--
+	-- The slack absorbs the measurement error, and truncation is only armed
+	-- when the title genuinely cannot fit.
+	local TITLE_SLACK = 6   -- kept under SUB_GAP so it can never reach the pill
+
 	local function layoutTitle()
 		if not SubPill then
+			TitleLabel.TextTruncate = Enum.TextTruncate.AtEnd
 			TitleLabel.Size = UDim2.new(1, -(reservedRight + TITLE_X), 1, 0)
 			return
 		end
 		local subW  = SUB_PADX + measureText(plainSubTitle, Theme.CaptionSize, Theme.FontMedium)
-		local avail = Width - TITLE_X - reservedRight - SUB_GAP - subW
-		local tw    = math.min(measureText(plainTitle, Theme.TitleSize, Theme.FontBold),
-		                       math.max(avail, 20))
+		local avail = math.max(Width - TITLE_X - reservedRight - SUB_GAP - subW, 20)
+		local textW = math.ceil(measureText(plainTitle, Theme.TitleSize, Theme.FontBold))
+		local fits  = (textW + TITLE_SLACK) <= avail
+
+		TitleLabel.TextTruncate = fits and Enum.TextTruncate.None
+		                              or   Enum.TextTruncate.AtEnd
+
+		local tw = fits and textW or avail
 		SubPill.Position = UDim2.new(0, TITLE_X + tw + SUB_GAP, 0.5, 0)
-		TitleLabel.Size  = UDim2.new(0, tw, 1, 0)
+		TitleLabel.Size  = UDim2.new(0, tw + (fits and TITLE_SLACK or 0), 1, 0)
 	end
 	layoutTitle()
 
