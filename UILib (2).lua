@@ -1,7 +1,7 @@
 -- ============================================================
 -- UILib.lua  |  Self-contained loadstring library
 -- Usage:
---   local UILib = loadstring(game:HttpGet("https://raw.githubusercontent.com/blookzz/skibidi/refs/heads/main/UILib.lua"))()
+-- local UILib = loadstring(game:HttpGet("https://raw.githubusercontent.com/blookzz/skibidi/refs/heads/main/UILib.lua"))()
 -- ============================================================
 
 local UILib = {}
@@ -12,6 +12,7 @@ local UILib = {}
 local TweenService     = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local HttpService      = game:GetService("HttpService")
+local GuiService       = game:GetService("GuiService")
 local TextService      = game:GetService("TextService")
 local RunService       = game:GetService("RunService")
 local Players          = game:GetService("Players")
@@ -75,8 +76,159 @@ local Theme = {
 	BodySize         = 13,
 	SmallSize        = 12,
 	CaptionSize      = 11,
+
+	-- ── Semantic colours (notifications, badges, status dots) ──
+	Success          = Color3.fromRGB( 70, 200, 120),
+	Warning          = Color3.fromRGB(240, 180,  60),
+	Danger           = Color3.fromRGB(230,  75,  75),
+	Info             = Color3.fromRGB( 80, 160, 240),
+
+	-- ── Decoration switches ────────────────────────────────────
+	-- Every one of these can be turned off individually if a game's
+	-- performance budget is tight; nothing else in the library depends
+	-- on them being enabled.
+	Glow             = true,   -- soft accent bloom behind panels/controls
+	GlowStrength     = 0.72,   -- ImageTransparency of the bloom (0 = solid)
+	AnimatedBorder   = true,   -- slowly rotating gradient on panel strokes
+	BorderSpeed      = 22,     -- degrees per second for the above
+	Ripple           = true,   -- click ripple on buttons/rows
+	Shine            = true,   -- diagonal light sweep across hovered buttons
+	Grain            = true,   -- faint texture over large surfaces
+	GrainStrength    = 0.965,  -- ImageTransparency of the texture layer
+	Blur             = false,  -- global 3D blur while any panel is open
+	Gloss            = true,   -- vertical light gradient over cards and rows
+	LitEdge          = true,   -- outlines that catch light along their top edge
+	StrokeAlpha      = 0.34,   -- resting transparency of those outlines
+	Stagger          = true,   -- staggered pop-in as rows are built
+	Elevation        = 0.38,   -- panel drop-shadow strength (0 = pitch black)
+	Flow             = true,   -- travelling shimmer across progress fills
+	FlowSpeed        = 0.55,   -- gradient offsets per second for the above
+
+	-- Gradient endpoints used for accent fills (slider fill, active tab,
+	-- progress bars). Left nil = derived automatically from Accent.
+	AccentGrad1      = nil,
+	AccentGrad2      = nil,
+
+	-- Asset ids (swap if your executor blocks these)
+	ShadowAsset      = "rbxassetid://6014261993",
+	GlowAsset        = "rbxassetid://5028857084",
+	GrainAsset       = "rbxassetid://9968344227",
+	RippleAsset      = "rbxassetid://266543268",
+	SpinnerAsset     = "rbxassetid://4965945816",
 }
 UILib.Theme = Theme
+
+-- ============================================================
+-- THEME PRESETS
+-- UILib.SetTheme("neon")            -- swap the whole palette
+-- UILib.SetTheme({ Accent = ... })  -- or merge in your own keys
+--
+-- Themes are read at *construction* time, so call this before you
+-- create any panels. Existing widgets keep the palette they were
+-- built with.
+-- ============================================================
+local Presets = {
+	gold = {
+		Bg0 = Color3.fromRGB(12,12,12), Bg1 = Color3.fromRGB(18,18,18),
+		Bg2 = Color3.fromRGB(26,26,26), Bg3 = Color3.fromRGB(20,19,15),
+		Accent = Color3.fromRGB(220,160,60), AccentDim = Color3.fromRGB(100,72,28),
+		AccentSec = Color3.fromRGB(255,200,90), ToggleOff = Color3.fromRGB(38,34,26),
+		ToggleOn = Color3.fromRGB(180,120,40), Knob = Color3.fromRGB(255,220,140),
+		Hover = Color3.fromRGB(32,30,24), TextPrimary = Color3.fromRGB(235,215,170),
+		TextMuted = Color3.fromRGB(100,85,60), ActiveTabText = Color3.fromRGB(255,255,225),
+		InputBg = Color3.fromRGB(14,13,10),
+	},
+	midnight = {
+		Bg0 = Color3.fromRGB(10,11,16), Bg1 = Color3.fromRGB(16,18,26),
+		Bg2 = Color3.fromRGB(24,27,38), Bg3 = Color3.fromRGB(19,21,30),
+		Accent = Color3.fromRGB(96,140,255), AccentDim = Color3.fromRGB(42,58,110),
+		AccentSec = Color3.fromRGB(158,190,255), ToggleOff = Color3.fromRGB(32,36,50),
+		ToggleOn = Color3.fromRGB(66,102,205), Knob = Color3.fromRGB(214,228,255),
+		Hover = Color3.fromRGB(32,37,52), TextPrimary = Color3.fromRGB(214,222,240),
+		TextMuted = Color3.fromRGB(104,116,145), ActiveTabText = Color3.fromRGB(255,255,255),
+		InputBg = Color3.fromRGB(12,14,21),
+	},
+	neon = {
+		Bg0 = Color3.fromRGB(8,10,12), Bg1 = Color3.fromRGB(13,17,20),
+		Bg2 = Color3.fromRGB(20,26,30), Bg3 = Color3.fromRGB(15,20,23),
+		Accent = Color3.fromRGB(60,240,200), AccentDim = Color3.fromRGB(22,96,84),
+		AccentSec = Color3.fromRGB(150,255,232), ToggleOff = Color3.fromRGB(26,34,38),
+		ToggleOn = Color3.fromRGB(38,170,144), Knob = Color3.fromRGB(198,255,242),
+		Hover = Color3.fromRGB(26,36,40), TextPrimary = Color3.fromRGB(214,238,232),
+		TextMuted = Color3.fromRGB(88,124,118), ActiveTabText = Color3.fromRGB(240,255,252),
+		InputBg = Color3.fromRGB(10,14,16),
+	},
+	rose = {
+		Bg0 = Color3.fromRGB(16,10,14), Bg1 = Color3.fromRGB(23,15,20),
+		Bg2 = Color3.fromRGB(33,22,29), Bg3 = Color3.fromRGB(26,17,23),
+		Accent = Color3.fromRGB(244,114,160), AccentDim = Color3.fromRGB(112,45,72),
+		AccentSec = Color3.fromRGB(255,175,205), ToggleOff = Color3.fromRGB(44,29,38),
+		ToggleOn = Color3.fromRGB(190,80,124), Knob = Color3.fromRGB(255,214,230),
+		Hover = Color3.fromRGB(43,29,38), TextPrimary = Color3.fromRGB(240,220,230),
+		TextMuted = Color3.fromRGB(130,96,112), ActiveTabText = Color3.fromRGB(255,240,246),
+		InputBg = Color3.fromRGB(18,11,15),
+	},
+	emerald = {
+		Bg0 = Color3.fromRGB(9,14,11), Bg1 = Color3.fromRGB(14,21,17),
+		Bg2 = Color3.fromRGB(22,32,26), Bg3 = Color3.fromRGB(17,25,20),
+		Accent = Color3.fromRGB(72,205,120), AccentDim = Color3.fromRGB(30,92,54),
+		AccentSec = Color3.fromRGB(146,240,180), ToggleOff = Color3.fromRGB(28,40,32),
+		ToggleOn = Color3.fromRGB(50,150,90), Knob = Color3.fromRGB(200,250,220),
+		Hover = Color3.fromRGB(28,42,33), TextPrimary = Color3.fromRGB(216,236,224),
+		TextMuted = Color3.fromRGB(96,126,108), ActiveTabText = Color3.fromRGB(240,255,246),
+		InputBg = Color3.fromRGB(11,17,13),
+	},
+	crimson = {
+		Bg0 = Color3.fromRGB(15,9,9), Bg1 = Color3.fromRGB(22,14,14),
+		Bg2 = Color3.fromRGB(32,21,21), Bg3 = Color3.fromRGB(25,16,16),
+		Accent = Color3.fromRGB(232,76,76), AccentDim = Color3.fromRGB(110,34,34),
+		AccentSec = Color3.fromRGB(255,146,146), ToggleOff = Color3.fromRGB(44,27,27),
+		ToggleOn = Color3.fromRGB(180,55,55), Knob = Color3.fromRGB(255,208,208),
+		Hover = Color3.fromRGB(43,27,27), TextPrimary = Color3.fromRGB(238,218,218),
+		TextMuted = Color3.fromRGB(128,92,92), ActiveTabText = Color3.fromRGB(255,240,240),
+		InputBg = Color3.fromRGB(17,10,10),
+	},
+	violet = {
+		Bg0 = Color3.fromRGB(13,10,18), Bg1 = Color3.fromRGB(19,15,27),
+		Bg2 = Color3.fromRGB(28,22,40), Bg3 = Color3.fromRGB(22,17,31),
+		Accent = Color3.fromRGB(160,110,250), AccentDim = Color3.fromRGB(70,44,124),
+		AccentSec = Color3.fromRGB(203,172,255), ToggleOff = Color3.fromRGB(38,30,53),
+		ToggleOn = Color3.fromRGB(122,80,200), Knob = Color3.fromRGB(226,210,255),
+		Hover = Color3.fromRGB(38,30,54), TextPrimary = Color3.fromRGB(226,218,242),
+		TextMuted = Color3.fromRGB(116,104,142), ActiveTabText = Color3.fromRGB(248,244,255),
+		InputBg = Color3.fromRGB(15,11,21),
+	},
+	mono = {
+		Bg0 = Color3.fromRGB(10,10,10), Bg1 = Color3.fromRGB(17,17,17),
+		Bg2 = Color3.fromRGB(26,26,26), Bg3 = Color3.fromRGB(21,21,21),
+		Accent = Color3.fromRGB(225,225,225), AccentDim = Color3.fromRGB(80,80,80),
+		AccentSec = Color3.fromRGB(255,255,255), ToggleOff = Color3.fromRGB(38,38,38),
+		ToggleOn = Color3.fromRGB(150,150,150), Knob = Color3.fromRGB(255,255,255),
+		Hover = Color3.fromRGB(32,32,32), TextPrimary = Color3.fromRGB(228,228,228),
+		TextMuted = Color3.fromRGB(115,115,115), ActiveTabText = Color3.fromRGB(255,255,255),
+		InputBg = Color3.fromRGB(12,12,12),
+	},
+}
+UILib.Presets = Presets
+
+function UILib.SetTheme(nameOrTable)
+	local src = nameOrTable
+	if type(src) == "string" then src = Presets[src:lower()] end
+	if type(src) ~= "table" then return Theme end
+	for k, v in pairs(src) do Theme[k] = v end
+	-- A palette swap invalidates any hand-tuned gradient endpoints.
+	if type(nameOrTable) == "string" then
+		Theme.AccentGrad1, Theme.AccentGrad2 = nil, nil
+	end
+	return Theme
+end
+
+function UILib.GetThemeNames()
+	local out = {}
+	for k in pairs(Presets) do out[#out+1] = k end
+	table.sort(out)
+	return out
+end
 
 -- ============================================================
 -- INTERNAL HELPERS
@@ -84,6 +236,9 @@ UILib.Theme = Theme
 local TweenFast   = TweenInfo.new(0.14, Enum.EasingStyle.Quad,  Enum.EasingDirection.Out)
 local TweenMed    = TweenInfo.new(0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
 local TweenSpring = TweenInfo.new(0.28, Enum.EasingStyle.Back,  Enum.EasingDirection.Out)
+local TweenSnap   = TweenInfo.new(0.09, Enum.EasingStyle.Quad,  Enum.EasingDirection.Out)
+local TweenSoft   = TweenInfo.new(0.38, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+local TweenPop    = TweenInfo.new(0.44, Enum.EasingStyle.Back,  Enum.EasingDirection.Out)
 
 local function MakeCorner(parent, radius)
 	local c = Instance.new("UICorner")
@@ -135,6 +290,513 @@ local function MakeListLayout(parent, dir, pad, ha, va)
 	return l
 end
 
+-- ============================================================
+-- VISUAL TOOLKIT
+-- Small, composable decorators. Every one of them is a no-op when its
+-- corresponding Theme switch is off, so a caller can dial the whole
+-- library back to flat surfaces without touching component code.
+-- ============================================================
+
+-- ── Colour maths ────────────────────────────────────────────
+local function Lighten(c, amt)
+	amt = amt or 0.12
+	return Color3.new(
+		math.clamp(c.R + amt, 0, 1),
+		math.clamp(c.G + amt, 0, 1),
+		math.clamp(c.B + amt, 0, 1))
+end
+
+local function Darken(c, amt)
+	amt = amt or 0.12
+	return Color3.new(
+		math.clamp(c.R - amt, 0, 1),
+		math.clamp(c.G - amt, 0, 1),
+		math.clamp(c.B - amt, 0, 1))
+end
+
+local function Mix(a, b, t)
+	t = math.clamp(t or 0.5, 0, 1)
+	return Color3.new(
+		a.R + (b.R - a.R) * t,
+		a.G + (b.G - a.G) * t,
+		a.B + (b.B - a.B) * t)
+end
+
+-- Shifts a colour's hue while preserving its saturation/value, so a
+-- two-stop accent gradient stays in the same family instead of drifting
+-- toward grey the way a plain lighten/darken pair does.
+local function HueShift(c, deg)
+	local h, sat, v = c:ToHSV()
+	h = (h + (deg or 0) / 360) % 1
+	return Color3.fromHSV(h, sat, v)
+end
+
+local function ToHex(c)
+	return string.format("%02X%02X%02X",
+		math.floor(c.R * 255 + 0.5),
+		math.floor(c.G * 255 + 0.5),
+		math.floor(c.B * 255 + 0.5))
+end
+UILib.Lighten, UILib.Darken, UILib.Mix, UILib.HueShift = Lighten, Darken, Mix, HueShift
+
+-- The two endpoints every accent fill uses. Explicit Theme overrides win;
+-- otherwise a subtle hue rotation either side of Accent gives the fill a
+-- gradient that still reads as "the accent colour".
+local function AccentPair(accent)
+	accent = accent or Theme.Accent
+	local a = Theme.AccentGrad1 or Lighten(HueShift(accent,  14), 0.06)
+	local b = Theme.AccentGrad2 or Darken (HueShift(accent, -14), 0.06)
+	return a, b
+end
+UILib.AccentPair = AccentPair
+
+-- ── Shared animation driver ─────────────────────────────────
+-- One Heartbeat connection drives every rotating gradient in the whole
+-- library. Registering N animated borders costs one table entry each,
+-- not N connections, and the connection tears itself down when the last
+-- animated object dies.
+local _spinners     = {}   -- [UIGradient] = degreesPerSecond  (rotates)
+local _flows        = {}   -- [UIGradient] = offsetsPerSecond   (scrolls)
+local _spinnerCount = 0
+local _spinnerConn  = nil
+
+local function _spinStep(dt)
+	for grad, speed in pairs(_spinners) do
+		if grad.Parent then
+			grad.Rotation = (grad.Rotation + speed * dt) % 360
+		else
+			_spinners[grad] = nil
+			_spinnerCount = _spinnerCount - 1
+		end
+	end
+	-- Offset wraps through [-1, 1] so a gradient wider than its parent
+	-- reads as a highlight travelling across the fill, then repeating.
+	for grad, speed in pairs(_flows) do
+		if grad.Parent then
+			local x = grad.Offset.X + speed * dt
+			if x > 1 then x = x - 2 end
+			grad.Offset = Vector2.new(x, 0)
+		else
+			_flows[grad] = nil
+			_spinnerCount = _spinnerCount - 1
+		end
+	end
+	if _spinnerCount <= 0 and _spinnerConn then
+		_spinnerConn:Disconnect()
+		_spinnerConn = nil
+	end
+end
+
+local function _startDriver()
+	if not _spinnerConn then
+		_spinnerConn = RunService.Heartbeat:Connect(_spinStep)
+	end
+end
+
+local function RegisterSpin(grad, speed)
+	if _spinners[grad] then return end
+	_spinners[grad] = speed or Theme.BorderSpeed or 20
+	_spinnerCount   = _spinnerCount + 1
+	_startDriver()
+	grad.Destroying:Connect(function()
+		if _spinners[grad] then
+			_spinners[grad] = nil
+			_spinnerCount = _spinnerCount - 1
+		end
+	end)
+end
+
+-- Same registry, different axis: used by the shimmer that crawls across
+-- progress fills and active tab pills.
+local function RegisterFlow(grad, speed)
+	if _flows[grad] then return end
+	_flows[grad]  = speed or Theme.FlowSpeed or 0.5
+	_spinnerCount = _spinnerCount + 1
+	_startDriver()
+	grad.Destroying:Connect(function()
+		if _flows[grad] then
+			_flows[grad] = nil
+			_spinnerCount = _spinnerCount - 1
+		end
+	end)
+end
+
+-- ── Gradient fills ──────────────────────────────────────────
+-- A two-stop accent gradient laid over a solid fill. The parent keeps its
+-- BackgroundColor3 as the base, so state tweens (hover, disabled) still
+-- work — the gradient only ever multiplies what's underneath.
+local function MakeAccentGradient(parent, accent, rotation)
+	local a, b = AccentPair(accent)
+	local g = Instance.new("UIGradient")
+	g.Color    = ColorSequence.new(a, b)
+	g.Rotation = rotation or 25
+	g.Parent   = parent
+	return g
+end
+
+-- Three-stop "glass" gradient: bright at the top edge, neutral through
+-- the middle, slightly dark at the bottom. Multiplies the parent colour.
+local function MakeGlass(parent, strength, rotation)
+	local k  = strength or 0.10
+	local hi = 1 + k * 0.55
+	local lo = 1 - k
+	local g = Instance.new("UIGradient")
+	g.Rotation = rotation or 90
+	g.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0.00, Color3.new(math.min(hi,1), math.min(hi,1), math.min(hi,1))),
+		ColorSequenceKeypoint.new(0.45, Color3.new(1, 1, 1)),
+		ColorSequenceKeypoint.new(1.00, Color3.new(lo, lo, lo)),
+	})
+	g.Parent = parent
+	return g
+end
+
+-- ── Lit edges ───────────────────────────────────────────────
+-- The outline every card, row and card-like surface wears.
+--
+-- A flat 1px outline in one colour is what makes a dark UI look like
+-- boxes drawn on paper. A real edge catches light: bright where it faces
+-- the light source, nearly gone where it faces away. That's all this is —
+-- the stroke colour is lifted a touch, and a vertical gradient rides it
+-- so the top edge reads as a highlight and the bottom edge falls away.
+--
+-- Crucially a UIStroke is *not* a layout item, so this works on surfaces
+-- driven by UIListLayout/AutomaticSize (which is most of them) where an
+-- extra decorative Frame would shove the content around.
+local function EdgeRest(base)
+	return Lighten(base or Theme.AccentDim, 0.16)
+end
+
+local function MakeEdge(parent, color, thickness, alpha)
+	local s = MakeStroke(parent, EdgeRest(color), thickness or 1)
+	if not Theme.LitEdge then return s end
+	s.Transparency = alpha or Theme.StrokeAlpha or 0.34
+	local g = Instance.new("UIGradient")
+	g.Rotation = 90
+	g.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0.00, Color3.new(1.00, 1.00, 1.00)),
+		ColorSequenceKeypoint.new(0.48, Color3.new(0.66, 0.66, 0.66)),
+		ColorSequenceKeypoint.new(1.00, Color3.new(0.40, 0.40, 0.40)),
+	})
+	g.Parent = s
+	return s
+end
+
+-- Theme-gated glass wash, for the many call sites that want depth only
+-- when decoration is switched on.
+local function MakeGloss(parent, strength, rotation)
+	if not Theme.Gloss then return nil end
+	return MakeGlass(parent, strength, rotation)
+end
+
+-- An accent fill that reads as lit metal rather than a flat swatch: a
+-- two-stop accent gradient with a bright band travelling through it.
+-- Used for slider fills, progress fills and the active tab pill.
+local function MakeAccentFill(parent, accent, flow)
+	local a, b = AccentPair(accent)
+	local g = Instance.new("UIGradient")
+	g.Rotation = 90
+	g.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0.00, Lighten(a, 0.10)),
+		ColorSequenceKeypoint.new(0.55, b),
+		ColorSequenceKeypoint.new(1.00, Darken(b, 0.10)),
+	})
+	g.Parent = parent
+
+	if not (flow and Theme.Flow) then return g end
+
+	-- The shimmer is a second, wider gradient on a transparent overlay —
+	-- keeping it off `g` means the fill's colour and its highlight can be
+	-- animated independently.
+	local Sheen = Instance.new("Frame")
+	Sheen.Name                   = "Flow"
+	Sheen.Size                   = UDim2.new(1, 0, 1, 0)
+	Sheen.BackgroundColor3       = Color3.new(1, 1, 1)
+	Sheen.BorderSizePixel        = 0
+	Sheen.ZIndex                 = (parent.ZIndex or 1) + 1
+	Sheen.Parent                 = parent
+	local c = parent:FindFirstChildOfClass("UICorner")
+	MakeCorner(Sheen, c and c.CornerRadius or UDim.new(1, 0))
+
+	local fg = Instance.new("UIGradient")
+	fg.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0.00, 1),
+		NumberSequenceKeypoint.new(0.42, 1),
+		NumberSequenceKeypoint.new(0.50, 0.72),
+		NumberSequenceKeypoint.new(0.58, 1),
+		NumberSequenceKeypoint.new(1.00, 1),
+	})
+	fg.Parent = Sheen
+	RegisterFlow(fg, Theme.FlowSpeed)
+	return g, Sheen
+end
+
+-- ── Strokes ─────────────────────────────────────────────────
+-- A stroke whose colour sweeps around the border. The gradient rides the
+-- shared driver above, so an entire screen of panels shares one update.
+local function MakeAnimatedStroke(parent, accent, thickness, speed)
+	local s = MakeStroke(parent, accent or Theme.Accent, thickness or 1.2)
+	if not Theme.AnimatedBorder then return s, nil end
+	local a, b = AccentPair(accent)
+	local g = Instance.new("UIGradient")
+	g.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0.00, Darken(b, 0.20)),
+		ColorSequenceKeypoint.new(0.28, a),
+		ColorSequenceKeypoint.new(0.55, Darken(b, 0.24)),
+		ColorSequenceKeypoint.new(0.80, a),
+		ColorSequenceKeypoint.new(1.00, Darken(b, 0.20)),
+	})
+	g.Parent = s
+	RegisterSpin(g, speed or Theme.BorderSpeed)
+	return s, g
+end
+
+-- ── Bloom / glow ────────────────────────────────────────────
+-- A tinted, blurred copy of the target's rounded-rect silhouette drawn
+-- behind it. Lives as a sibling (not a child) so it is not clipped by a
+-- ClipsDescendants parent, and mirrors Position/Size every frame the
+-- target changes — which covers dragging, tweening and minimising.
+local function MakeGlow(target, color, spread, transparency)
+	if not Theme.Glow then return nil end
+	spread = spread or 22
+
+	local G = Instance.new("ImageLabel")
+	G.Name                   = "Glow"
+	G.BackgroundTransparency = 1
+	G.Image                  = Theme.ShadowAsset
+	G.ImageColor3            = color or Theme.Accent
+	G.ImageTransparency      = transparency or Theme.GlowStrength
+	G.ScaleType              = Enum.ScaleType.Slice
+	G.SliceCenter            = Rect.new(49, 49, 450, 450)
+	G.ZIndex                 = math.max((target.ZIndex or 1) - 1, 0)
+	G.Parent                 = target.Parent
+
+	local function sync()
+		local pos, sz = target.Position, target.Size
+		G.Position = UDim2.new(pos.X.Scale, pos.X.Offset - spread,
+		                       pos.Y.Scale, pos.Y.Offset - spread)
+		G.Size     = UDim2.new(sz.X.Scale, sz.X.Offset + spread * 2,
+		                       sz.Y.Scale, sz.Y.Offset + spread * 2)
+	end
+	target:GetPropertyChangedSignal("Position"):Connect(sync)
+	target:GetPropertyChangedSignal("Size"):Connect(sync)
+	target:GetPropertyChangedSignal("Visible"):Connect(function()
+		G.Visible = target.Visible
+	end)
+	target.Destroying:Connect(function() if G.Parent then G:Destroy() end end)
+	sync()
+	return G
+end
+
+-- Inner bloom: same idea but parented *inside* the target and inset
+-- negatively, for controls that aren't clipped and don't move on their own
+-- (toggle tracks, slider knobs, badges).
+local function MakeInnerGlow(target, color, spread, transparency)
+	if not Theme.Glow then return nil end
+	spread = spread or 10
+	local G = Instance.new("ImageLabel")
+	G.Name                   = "InnerGlow"
+	G.AnchorPoint            = Vector2.new(0.5, 0.5)
+	G.Position               = UDim2.new(0.5, 0, 0.5, 0)
+	G.Size                   = UDim2.new(1, spread * 2, 1, spread * 2)
+	G.BackgroundTransparency = 1
+	G.Image                  = Theme.ShadowAsset
+	G.ImageColor3            = color or Theme.Accent
+	G.ImageTransparency      = transparency or Theme.GlowStrength
+	G.ScaleType              = Enum.ScaleType.Slice
+	G.SliceCenter            = Rect.new(49, 49, 450, 450)
+	G.ZIndex                 = math.max((target.ZIndex or 1) - 1, 0)
+	G.Parent                 = target
+	return G
+end
+
+-- ── Texture ─────────────────────────────────────────────────
+-- Barely-there tiled noise. At the default strength it is invisible as
+-- "grain" and only shows up as the absence of flat, banded fills on large
+-- surfaces.
+local function MakeGrain(parent)
+	if not Theme.Grain then return nil end
+	local N = Instance.new("ImageLabel")
+	N.Name                   = "Grain"
+	N.Size                   = UDim2.new(1, 0, 1, 0)
+	N.BackgroundTransparency = 1
+	N.Image                  = Theme.GrainAsset
+	N.ImageTransparency      = Theme.GrainStrength
+	N.ScaleType              = Enum.ScaleType.Tile
+	N.TileSize               = UDim2.new(0, 128, 0, 128)
+	N.ZIndex                 = 0
+	N.Parent                 = parent
+	return N
+end
+
+-- ── Ripple ──────────────────────────────────────────────────
+-- Material-style circle expanding from the click point. Needs a clipping
+-- host, so it creates its own rather than requiring the caller's frame to
+-- clip (which would cut off strokes and glows).
+local function MakeRipple(button, color, radius)
+	if not Theme.Ripple then return end
+
+	local Host = Instance.new("Frame")
+	Host.Name                   = "RippleHost"
+	Host.Size                   = UDim2.new(1, 0, 1, 0)
+	Host.BackgroundTransparency = 1
+	Host.BorderSizePixel        = 0
+	Host.ClipsDescendants       = true
+	Host.ZIndex                 = (button.ZIndex or 1)
+	Host.Parent                 = button
+	MakeCorner(Host, UDim.new(0, radius or Theme.CornerRadiusSmall))
+
+	button.MouseButton1Down:Connect(function(x, y)
+		local abs = button.AbsolutePosition
+		local sz  = button.AbsoluteSize
+		local lx, ly = x - abs.X, y - abs.Y
+
+		-- Diameter must reach the farthest corner from the click point,
+		-- otherwise the ripple visibly stops short on off-centre clicks.
+		local far = math.max(
+			math.sqrt(lx ^ 2 + ly ^ 2),
+			math.sqrt((sz.X - lx) ^ 2 + ly ^ 2),
+			math.sqrt(lx ^ 2 + (sz.Y - ly) ^ 2),
+			math.sqrt((sz.X - lx) ^ 2 + (sz.Y - ly) ^ 2))
+		local d = far * 2
+
+		local C = Instance.new("ImageLabel")
+		C.BackgroundTransparency = 1
+		C.Image                  = Theme.RippleAsset
+		C.ImageColor3            = color or Theme.Accent
+		C.ImageTransparency      = 0.72
+		C.AnchorPoint            = Vector2.new(0.5, 0.5)
+		C.Position               = UDim2.new(0, lx, 0, ly)
+		C.Size                   = UDim2.new(0, 0, 0, 0)
+		C.ZIndex                 = Host.ZIndex
+		C.Parent                 = Host
+
+		local info = TweenInfo.new(0.45, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+		TweenService:Create(C, info, { Size = UDim2.new(0, d, 0, d), ImageTransparency = 1 }):Play()
+		task.delay(0.5, function() if C.Parent then C:Destroy() end end)
+	end)
+end
+
+-- ── Shine sweep ─────────────────────────────────────────────
+-- A slanted highlight that crosses the control once per hover. Returns a
+-- `play` function so callers can also fire it on click or on state change.
+local function MakeShine(target, radius)
+	if not Theme.Shine then return function() end end
+
+	local Host = Instance.new("Frame")
+	Host.Name                   = "ShineHost"
+	Host.Size                   = UDim2.new(1, 0, 1, 0)
+	Host.BackgroundTransparency = 1
+	Host.BorderSizePixel        = 0
+	Host.ClipsDescendants       = true
+	Host.ZIndex                 = (target.ZIndex or 1)
+	Host.Parent                 = target
+	MakeCorner(Host, UDim.new(0, radius or Theme.CornerRadiusSmall))
+
+	local Bar = Instance.new("Frame")
+	Bar.Size                   = UDim2.new(0, 46, 2, 0)
+	Bar.AnchorPoint            = Vector2.new(0.5, 0.5)
+	Bar.Position               = UDim2.new(-0.35, 0, 0.5, 0)
+	Bar.Rotation               = 18
+	Bar.BackgroundColor3       = Color3.new(1, 1, 1)
+	Bar.BorderSizePixel        = 0
+	Bar.ZIndex                 = Host.ZIndex
+	Bar.Parent                 = Host
+
+	-- Feather both edges so it reads as light, not as a white rectangle.
+	local grad = Instance.new("UIGradient")
+	grad.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0.0, 1),
+		NumberSequenceKeypoint.new(0.5, 0.80),
+		NumberSequenceKeypoint.new(1.0, 1),
+	})
+	grad.Parent = Bar
+
+	local playing = false
+	local function play()
+		if playing or not Bar.Parent then return end
+		playing = true
+		Bar.Position = UDim2.new(-0.35, 0, 0.5, 0)
+		local t = TweenService:Create(Bar,
+			TweenInfo.new(0.55, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+			{ Position = UDim2.new(1.35, 0, 0.5, 0) })
+		t.Completed:Connect(function() playing = false end)
+		t:Play()
+	end
+
+	target.MouseEnter:Connect(play)
+	return play
+end
+
+-- ── Spinner ─────────────────────────────────────────────────
+-- Indeterminate loading ring. Rotates on the shared driver via a dummy
+-- gradient would be wrong here (we need the *image* to spin), so it owns a
+-- tween loop that stops the moment it's hidden or destroyed.
+local function MakeSpinner(parent, size, color)
+	local S = Instance.new("ImageLabel")
+	S.Name                   = "Spinner"
+	S.AnchorPoint            = Vector2.new(0.5, 0.5)
+	S.Position               = UDim2.new(0.5, 0, 0.5, 0)
+	S.Size                   = UDim2.new(0, size or 18, 0, size or 18)
+	S.BackgroundTransparency = 1
+	S.Image                  = Theme.SpinnerAsset
+	S.ImageColor3            = color or Theme.Accent
+	S.Parent                 = parent
+
+	task.spawn(function()
+		while S.Parent do
+			if S.Visible then
+				S.Rotation = (S.Rotation + 9) % 360
+			end
+			RunService.Heartbeat:Wait()
+		end
+	end)
+	return S
+end
+
+-- ── Entrance ────────────────────────────────────────────────
+-- Rows settle into place instead of appearing all at once.
+--
+-- The stagger index is read from how many siblings already exist rather
+-- than being passed in, so a tab built top-to-bottom in one pass cascades
+-- for free and no call site has to keep a counter. The delay is capped so
+-- a fifty-row tab doesn't take two seconds to finish arriving.
+--
+-- UIScale is deliberate: a UIListLayout measures a child's *Size*, not its
+-- rendered scale, so this can never disturb the layout it animates inside.
+local function PlayEntrance(inst, index)
+	if not Theme.Stagger then return end
+	if not index then
+		local n = 0
+		local parent = inst.Parent
+		if parent then
+			for _, c in ipairs(parent:GetChildren()) do
+				if c ~= inst and c:IsA("GuiObject") then n = n + 1 end
+			end
+		end
+		index = n
+	end
+	local delaySec = math.min(index * 0.028, 0.30)
+
+	local scale = Instance.new("UIScale")
+	scale.Scale  = 0.965
+	scale.Parent = inst
+
+	-- Fading the outline in alongside the scale is what turns a bare pop
+	-- into something that reads as "settling": the edge resolves last.
+	local stroke = inst:FindFirstChildOfClass("UIStroke")
+	local restAlpha = stroke and stroke.Transparency or 0
+	if stroke then stroke.Transparency = 1 end
+
+	task.delay(delaySec, function()
+		if not inst.Parent then return end
+		TweenService:Create(scale, TweenPop, { Scale = 1 }):Play()
+		if stroke and stroke.Parent then
+			TweenService:Create(stroke, TweenSoft, { Transparency = restAlpha }):Play()
+		end
+	end)
+end
+
 -- Some rows (Section headers, Dropdown/ColorPicker heads) are clickable
 -- TextButtons that span edge-to-edge inside a rounded card, with no
 -- corner/inset of their own. Tinting them directly on hover causes two
@@ -159,12 +821,27 @@ local function MakeHoverFill(Head, inset, radius)
 	Fill.Parent                 = Head
 	MakeCorner(Fill, UDim.new(0, radius or 6))
 
+	-- A short accent tick that grows out of the left edge on hover. It
+	-- lives inside Fill so it inherits the same inset and can never touch
+	-- the parent card's corners either.
+	local Tick = Instance.new("Frame")
+	Tick.Size             = UDim2.new(0, 2, 0, 0)
+	Tick.Position         = UDim2.new(0, 0, 0.5, 0)
+	Tick.AnchorPoint      = Vector2.new(0, 0.5)
+	Tick.BackgroundColor3 = Theme.Accent
+	Tick.BorderSizePixel  = 0
+	Tick.ZIndex           = 1
+	Tick.Parent           = Fill
+	MakeCorner(Tick, UDim.new(1, 0))
+
 	Head.MouseEnter:Connect(function()
 		TweenService:Create(Fill, TweenFast, { BackgroundColor3 = Theme.Hover }):Play()
 		Fill.BackgroundTransparency = 0
+		TweenService:Create(Tick, TweenSpring, { Size = UDim2.new(0, 2, 0.55, 0) }):Play()
 	end)
 	Head.MouseLeave:Connect(function()
 		TweenService:Create(Fill, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
+		TweenService:Create(Tick, TweenFast, { Size = UDim2.new(0, 2, 0, 0) }):Play()
 		task.delay(0.14, function() Fill.BackgroundTransparency = 1 end)
 	end)
 
@@ -229,6 +906,76 @@ end
 local Flags = {}
 UILib.Flags = Flags
 
+-- ── Panel registry ──────────────────────────────────────────
+-- Every ScreenGui the library creates is tracked here so
+-- UILib.Unload() can tear the whole UI down in one call.
+local _allGuis = {}
+
+-- ── Tooltip ─────────────────────────────────────────────────
+-- One shared tooltip for the whole library. Components opt in with
+-- Options.Tooltip = "text"; it follows the mouse, clamps to the screen
+-- and hides itself when the hovered element dies.
+local _tooltipSg, _tooltipFrame, _tooltipLbl
+
+local function _ensureTooltip()
+	if _tooltipSg and _tooltipSg.Parent then return end
+	_tooltipSg = Instance.new("ScreenGui")
+	_tooltipSg.Name           = "UILibTooltip"
+	_tooltipSg.ResetOnSpawn   = false
+	_tooltipSg.DisplayOrder   = 2000
+	_tooltipSg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	_tooltipSg.Parent         = PlayerGui
+
+	_tooltipFrame = Instance.new("Frame")
+	_tooltipFrame.AutomaticSize          = Enum.AutomaticSize.XY
+	_tooltipFrame.BackgroundColor3       = Theme.Bg0
+	_tooltipFrame.BackgroundTransparency = 0.05
+	_tooltipFrame.BorderSizePixel        = 0
+	_tooltipFrame.Visible                = false
+	_tooltipFrame.Parent                 = _tooltipSg
+	MakeCorner(_tooltipFrame, UDim.new(0, Theme.CornerRadiusXs))
+	MakeEdge(_tooltipFrame, Theme.AccentDim, 1)
+	MakeGloss(_tooltipFrame, 0.10)
+	MakePadding(_tooltipFrame, 8, 8, 5, 5)
+
+	_tooltipLbl = Instance.new("TextLabel")
+	_tooltipLbl.AutomaticSize          = Enum.AutomaticSize.XY
+	_tooltipLbl.BackgroundTransparency = 1
+	_tooltipLbl.Font                   = Theme.FontRegular
+	_tooltipLbl.TextSize               = Theme.SmallSize
+	_tooltipLbl.TextColor3             = Theme.TextPrimary
+	_tooltipLbl.Parent                 = _tooltipFrame
+end
+
+local function _positionTooltip()
+	local loc   = UserInputService:GetMouseLocation()
+	local inset = GuiService:GetGuiInset()
+	local x, y  = loc.X - inset.X + 16, loc.Y - inset.Y + 14
+	local screen, sz = _tooltipSg.AbsoluteSize, _tooltipFrame.AbsoluteSize
+	x = math.max(0, math.min(x, screen.X - sz.X - 4))
+	y = math.max(0, math.min(y, screen.Y - sz.Y - 4))
+	_tooltipFrame.Position = UDim2.fromOffset(x, y)
+end
+
+local function AttachTooltip(target, text)
+	if not text or text == "" then return end
+	target.MouseEnter:Connect(function()
+		_ensureTooltip()
+		_tooltipLbl.Text      = text
+		_tooltipFrame.Visible = true
+		_positionTooltip()
+	end)
+	target.MouseMoved:Connect(function()
+		if _tooltipFrame and _tooltipFrame.Visible then _positionTooltip() end
+	end)
+	target.MouseLeave:Connect(function()
+		if _tooltipFrame then _tooltipFrame.Visible = false end
+	end)
+	target.Destroying:Connect(function()
+		if _tooltipFrame then _tooltipFrame.Visible = false end
+	end)
+end
+
 -- Default parent used by CreatePanel when Options.Parent is omitted.
 -- Overridable in one place via UILib.Init({ Parent = someInstance }).
 local DefaultParent = PlayerGui
@@ -244,10 +991,17 @@ local DefaultParent = PlayerGui
 --   Height       number    Content height in pixels    (default 300)
 --   Tabs         table     Array of tab name strings   (optional — omit for no tabs)
 --   DefaultTab   number    Initially active tab index  (default 1)
+--   TabSide      string    "top" | "left"              (default "top")
+--                          "left" renders a vertical tab rail instead
+--                          of the horizontal bar under the header
+--   TabWidth     number    Rail width when TabSide="left" (default 96)
+--   SubTitle     string    Small muted text after the title (optional)
 --   Variant      string    "gold"|"blue"|"green"|"red" (optional)
 --   Minimized    bool      Start minimized             (default false)
 --   ClampToScreen bool     Keep the panel inside the screen while
 --                          dragging                    (default false)
+--   ToggleKey    Enum.KeyCode | string   Hotkey that shows/hides the
+--                          whole panel (optional)
 --
 -- Returns:
 --   {
@@ -257,6 +1011,9 @@ local DefaultParent = PlayerGui
 --     GetTab(index),     -- returns the Frame for tab[index]  (nil if no tabs)
 --     SetTab(index),     -- switches active tab
 --     GetActiveTab(),    -- returns current tab index
+--     GetTabButton(index), SetTitle(text),
+--     SetVisible(bool), ToggleVisible(), IsVisible(),
+--     SetMinimized(bool), IsMinimized(), Close(),
 --   }
 -- ============================================================
 function UILib.CreatePanel(Options)
@@ -284,9 +1041,12 @@ function UILib.CreatePanel(Options)
 		AccentDim = Theme.AccentDim
 	end
 
-	-- Height constants
+	-- Layout constants. Side tabs replace the horizontal bar with a
+	-- vertical rail, so the bar contributes no height in that mode.
+	local sideTabs   = hasTabs and Options.TabSide == "left"
 	local HEADER_H   = Theme.HeaderHeight
-	local TABBAR_H   = hasTabs and Theme.TabHeight or 0
+	local TABBAR_H   = (hasTabs and not sideTabs) and Theme.TabHeight or 0
+	local RAIL_W     = sideTabs and (Options.TabWidth or 96) or 0
 	local CONTENT_H  = Options.Height or 300
 	local FULL_H     = HEADER_H + TABBAR_H + CONTENT_H
 
@@ -296,6 +1056,7 @@ function UILib.CreatePanel(Options)
 	Gui.ResetOnSpawn   = false
 	Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 	Gui.Parent         = Options.Parent or DefaultParent
+	table.insert(_allGuis, Gui)
 
 	-- ── Main frame ─────────────────────────────────────────
 	local Frame = Instance.new("Frame")
@@ -308,33 +1069,63 @@ function UILib.CreatePanel(Options)
 	Frame.Active                 = true
 	Frame.Parent                 = Gui
 	MakeCorner(Frame, UDim.new(0, Theme.CornerRadius))
-	MakeStroke(Frame, Accent, 1.2)
-	MakeSheen(Frame, 0.10)
+	-- Border shimmers slowly around the panel when Theme.AnimatedBorder is
+	-- on; falls back to a plain accent stroke when it isn't.
+	local FrameStroke = MakeAnimatedStroke(Frame, Accent, 1.4)
+	MakeGlass(Frame, 0.14)
+	MakeGrain(Frame)
 
 	-- Drop shadow. The panel clips its descendants, so the shadow lives
 	-- as a sibling underneath it and mirrors the panel's Position/Size
 	-- (property signals fire every frame during drags and tweens, so it
 	-- tracks minimize/restore and dragging for free).
-	local SHADOW_PAD = 27
-	local Shadow = Instance.new("ImageLabel")
-	Shadow.Name                   = "Shadow"
-	Shadow.BackgroundTransparency = 1
-	Shadow.Image                  = "rbxassetid://6014261993"
-	Shadow.ImageColor3            = Color3.new(0, 0, 0)
-	Shadow.ImageTransparency      = 0.42
-	Shadow.ScaleType              = Enum.ScaleType.Slice
-	Shadow.SliceCenter            = Rect.new(49, 49, 450, 450)
-	Shadow.ZIndex                 = 0
-	Shadow.Parent                 = Gui
+	-- Two shadow layers, not one. A wide, faint falloff lifts the window
+	-- off whatever is behind it; a tighter, darker one hugs the edges as a
+	-- contact shadow. A single blur can be soft or grounded, never both,
+	-- and that is exactly what makes one-layer windows look pasted on.
+	local shadowLayers = {}
+	local function makeShadowLayer(pad, alpha, drop)
+		local L = Instance.new("ImageLabel")
+		L.Name                   = "Shadow"
+		L.BackgroundTransparency = 1
+		L.Image                  = Theme.ShadowAsset
+		L.ImageColor3            = Color3.new(0, 0, 0)
+		L.ImageTransparency      = alpha
+		L.ScaleType              = Enum.ScaleType.Slice
+		L.SliceCenter            = Rect.new(49, 49, 450, 450)
+		L.ZIndex                 = 0
+		L.Parent                 = Gui
+		local sc = Instance.new("UIScale")
+		sc.Scale  = 0.92
+		sc.Parent = L
+		table.insert(shadowLayers, { Obj = L, Pad = pad, Drop = drop, Scale = sc })
+		return L
+	end
+
+	local elev = Theme.Elevation or 0.38
+	makeShadowLayer(38, math.clamp(elev + 0.26, 0, 1), 12)   -- ambient
+	local Shadow = makeShadowLayer(16, elev, 4)              -- contact
 
 	local function syncShadow()
-		local p, s = Frame.Position, Frame.Size
-		Shadow.Position = UDim2.new(p.X.Scale, p.X.Offset - SHADOW_PAD, p.Y.Scale, p.Y.Offset - SHADOW_PAD + 5)
-		Shadow.Size     = UDim2.new(s.X.Scale, s.X.Offset + SHADOW_PAD * 2, s.Y.Scale, s.Y.Offset + SHADOW_PAD * 2)
+		local p, sz = Frame.Position, Frame.Size
+		for _, L in ipairs(shadowLayers) do
+			L.Obj.Position = UDim2.new(p.X.Scale, p.X.Offset - L.Pad,
+			                           p.Y.Scale, p.Y.Offset - L.Pad + L.Drop)
+			L.Obj.Size     = UDim2.new(sz.X.Scale, sz.X.Offset + L.Pad * 2,
+			                           sz.Y.Scale, sz.Y.Offset + L.Pad * 2)
+		end
 	end
 	Frame:GetPropertyChangedSignal("Position"):Connect(syncShadow)
 	Frame:GetPropertyChangedSignal("Size"):Connect(syncShadow)
+	Frame:GetPropertyChangedSignal("Visible"):Connect(function()
+		for _, L in ipairs(shadowLayers) do L.Obj.Visible = Frame.Visible end
+	end)
 	syncShadow()
+
+	-- Ambient accent bloom. Sits between the shadow and the panel so the
+	-- window looks lit rather than pasted onto the screen.
+	local Bloom = MakeGlow(Frame, Accent, 26, 0.86)
+	if Bloom then Bloom.ZIndex = 0 end
 
 	-- Entrance: gentle pop-in on creation (UIScale rests at 1 afterwards,
 	-- so it never affects layout or dragging). The shadow scales in with
@@ -342,11 +1133,10 @@ function UILib.CreatePanel(Options)
 	local OpenScale = Instance.new("UIScale")
 	OpenScale.Scale  = 0.92
 	OpenScale.Parent = Frame
-	local ShadowScale = Instance.new("UIScale")
-	ShadowScale.Scale  = 0.92
-	ShadowScale.Parent = Shadow
-	TweenService:Create(OpenScale,   TweenSpring, { Scale = 1 }):Play()
-	TweenService:Create(ShadowScale, TweenSpring, { Scale = 1 }):Play()
+	TweenService:Create(OpenScale, TweenSpring, { Scale = 1 }):Play()
+	for _, L in ipairs(shadowLayers) do
+		TweenService:Create(L.Scale, TweenSpring, { Scale = 1 }):Play()
+	end
 
 	-- ── Title / Header bar ─────────────────────────────────
 	local Header = Instance.new("Frame")
@@ -359,28 +1149,140 @@ function UILib.CreatePanel(Options)
 	Header.ZIndex           = 2
 	Header.Parent           = Frame
 	MakeCorner(Header, UDim.new(0, Theme.CornerRadius))
+	MakeGloss(Header, 0.14)
+
+	-- Accent wash across the header: strongest on the left behind the
+	-- title, gone by the middle, so the title sits in its own pool of
+	-- colour without tinting the buttons on the right.
+	local HeaderWash = Instance.new("Frame")
+	HeaderWash.Size                   = UDim2.new(1, 0, 1, 0)
+	HeaderWash.BackgroundColor3       = Accent
+	HeaderWash.BorderSizePixel        = 0
+	HeaderWash.ZIndex                 = 2
+	HeaderWash.Parent                 = Header
+	MakeCorner(HeaderWash, UDim.new(0, Theme.CornerRadius))
+	do
+		local g = Instance.new("UIGradient")
+		g.Rotation = 0
+		g.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0.00, 0.86),
+			NumberSequenceKeypoint.new(0.42, 0.97),
+			NumberSequenceKeypoint.new(1.00, 1.00),
+		})
+		g.Parent = HeaderWash
+	end
 
 	local showDiscord = Options.Discord == true
 	local reservedRight = 86 + (showDiscord and 34 or 0)
 
+	-- Small accent pip left of the title — a window "app icon" stand-in
+	-- that also gives the header a fixed optical left margin.
+	local TitlePip = Instance.new("Frame")
+	TitlePip.Size             = UDim2.new(0, 3, 0, 16)
+	TitlePip.Position         = UDim2.new(0, 12, 0.5, -8)
+	TitlePip.BackgroundColor3 = Accent
+	TitlePip.BorderSizePixel  = 0
+	TitlePip.ZIndex           = 3
+	TitlePip.Parent           = Header
+	MakeCorner(TitlePip, UDim.new(1, 0))
+	MakeAccentFill(TitlePip, Accent)
+	MakeInnerGlow(TitlePip, Accent, 8, 0.42)
+
+	local TITLE_X = 21   -- left edge of the title text (pip + gap)
+
+	-- Title and subtitle are separate labels rather than one RichText
+	-- string. Keeping them apart is what lets the minimize logic below
+	-- measure each with its own font/size — measuring RichText markup as
+	-- plain text is what previously made a subtitled panel refuse to
+	-- shrink past full width.
 	local TitleLabel = Instance.new("TextLabel")
-	TitleLabel.Size                   = UDim2.new(1, -reservedRight, 1, 0)
-	TitleLabel.Position               = UDim2.new(0, 14, 0, 0)
+	TitleLabel.Size                   = UDim2.new(1, -(reservedRight + TITLE_X), 1, 0)
+	TitleLabel.Position               = UDim2.new(0, TITLE_X, 0, 0)
 	TitleLabel.BackgroundTransparency = 1
 	TitleLabel.Font                   = Theme.FontBold
 	TitleLabel.TextSize               = Theme.TitleSize
 	TitleLabel.TextColor3             = Theme.AccentSec
 	TitleLabel.TextXAlignment         = Enum.TextXAlignment.Left
+	TitleLabel.TextTruncate           = Enum.TextTruncate.AtEnd
 	TitleLabel.Text                   = Options.Title or ""
 	TitleLabel.ZIndex                 = 3
 	TitleLabel.Parent                 = Header
+
+	-- Title text carries the accent gradient so it doesn't read as flat.
+	do
+		local a, b = AccentPair(Accent)
+		local g = Instance.new("UIGradient")
+		g.Color    = ColorSequence.new(Lighten(a, 0.28), Lighten(b, 0.12))
+		g.Rotation = 90
+		g.Parent   = TitleLabel
+	end
+
+	-- Optional subtitle, rendered as a rounded muted pill after the title
+	local plainTitle    = Options.Title    or ""
+	local plainSubTitle = Options.SubTitle or ""
+	local SubPill, SubLabel
+
+	local function measureText(str, size, font)
+		if not str or str == "" then return 0 end
+		local ok, b = pcall(TextService.GetTextSize, TextService,
+			str, size, font, Vector2.new(4000, HEADER_H))
+		return (ok and b and b.X) or (#str * size * 0.55)
+	end
+
+	if plainSubTitle ~= "" then
+		SubPill = Instance.new("Frame")
+		SubPill.AutomaticSize          = Enum.AutomaticSize.X
+		SubPill.Size                   = UDim2.new(0, 0, 0, 16)
+		SubPill.AnchorPoint            = Vector2.new(0, 0.5)
+		SubPill.BackgroundColor3       = Theme.Bg2
+		SubPill.BackgroundTransparency = 0.15
+		SubPill.BorderSizePixel        = 0
+		SubPill.ZIndex                 = 3
+		SubPill.Parent                 = Header
+		MakeCorner(SubPill, UDim.new(1, 0))
+		MakeEdge(SubPill, Theme.AccentDim, 1)
+		MakeGloss(SubPill, 0.10)
+		MakePadding(SubPill, 7, 7, 0, 0)
+
+		SubLabel = Instance.new("TextLabel")
+		SubLabel.AutomaticSize          = Enum.AutomaticSize.X
+		SubLabel.Size                   = UDim2.new(0, 0, 1, 0)
+		SubLabel.BackgroundTransparency = 1
+		SubLabel.Font                   = Theme.FontMedium
+		SubLabel.TextSize               = Theme.CaptionSize
+		SubLabel.TextColor3             = Theme.TextMuted
+		SubLabel.TextXAlignment         = Enum.TextXAlignment.Left
+		SubLabel.Text                   = plainSubTitle
+		SubLabel.ZIndex                 = 4
+		SubLabel.Parent                 = SubPill
+	end
+
+	local SUB_GAP  = 8    -- gap between title text and the subtitle pill
+	local SUB_PADX = 14   -- the pill's own horizontal padding (7 + 7)
+
+	-- Places the pill immediately after the *rendered* title text, and
+	-- keeps the title label's width honest so a long title truncates
+	-- instead of running under the pill or the header buttons.
+	local function layoutTitle()
+		if not SubPill then
+			TitleLabel.Size = UDim2.new(1, -(reservedRight + TITLE_X), 1, 0)
+			return
+		end
+		local subW  = SUB_PADX + measureText(plainSubTitle, Theme.CaptionSize, Theme.FontMedium)
+		local avail = Width - TITLE_X - reservedRight - SUB_GAP - subW
+		local tw    = math.min(measureText(plainTitle, Theme.TitleSize, Theme.FontBold),
+		                       math.max(avail, 20))
+		SubPill.Position = UDim2.new(0, TITLE_X + tw + SUB_GAP, 0.5, 0)
+		TitleLabel.Size  = UDim2.new(0, tw, 1, 0)
+	end
+	layoutTitle()
 
 	-- Accent underline on header
 	local AccentLine = Instance.new("Frame")
 	AccentLine.Size                   = UDim2.new(1, -20, 0, 1)
 	AccentLine.Position               = UDim2.new(0, 10, 1, -1)
-	AccentLine.BackgroundColor3       = Accent
-	AccentLine.BackgroundTransparency = 0.5
+	AccentLine.BackgroundColor3       = Lighten(Accent, 0.10)
+	AccentLine.BackgroundTransparency = 0.35
 	AccentLine.BorderSizePixel        = 0
 	AccentLine.ZIndex                 = 3
 	AccentLine.Parent                 = Header
@@ -396,37 +1298,52 @@ function UILib.CreatePanel(Options)
 	})
 	AccentLineGrad.Parent = AccentLine
 
+	-- Header buttons share one recipe: a soft translucent chip that lifts
+	-- toward the accent on hover and dips on press.
+	local function MakeHeaderChip(glyph, xOffset)
+		local B = Instance.new("TextButton")
+		B.Size                   = UDim2.new(0, 28, 0, 20)
+		B.AnchorPoint            = Vector2.new(1, 0.5)
+		B.Position               = UDim2.new(1, xOffset, 0.5, 0)
+		B.BackgroundColor3       = AccentDim
+		B.BackgroundTransparency = 0.30
+		B.BorderSizePixel        = 0
+		B.Font                   = Theme.FontIcon
+		B.TextSize               = 16
+		B.TextColor3             = Theme.AccentSec
+		B.Text                   = glyph or ""
+		B.AutoButtonColor        = false
+		B.ZIndex                 = 4
+		B.Parent                 = Header
+		MakeCorner(B, UDim.new(0, 7))
+		MakeEdge(B, Accent, 1, 0.55)
+		MakeGloss(B, 0.18)
+		MakeRipple(B, Theme.AccentSec, 7)
+
+		-- Chips are small, so colour alone barely registers as a press.
+		-- Scaling the whole chip is what actually reads at this size.
+		local sc = Instance.new("UIScale")
+		sc.Parent = B
+		B.MouseButton1Down:Connect(function()
+			TweenService:Create(sc, TweenSnap, { Scale = 0.87 }):Play()
+		end)
+		B.MouseButton1Up:Connect(function()
+			TweenService:Create(sc, TweenPop, { Scale = 1 }):Play()
+		end)
+		B.MouseEnter:Connect(function()
+			TweenService:Create(sc, TweenFast, { Scale = 1.06 }):Play()
+		end)
+		B.MouseLeave:Connect(function()
+			TweenService:Create(sc, TweenFast, { Scale = 1 }):Play()
+		end)
+		return B
+	end
+
 	-- Close button
-	local CloseBtn = Instance.new("TextButton")
-	CloseBtn.Size                   = UDim2.new(0, 28, 0, 20)
-	CloseBtn.AnchorPoint            = Vector2.new(1, 0.5)
-	CloseBtn.Position               = UDim2.new(1, -8, 0.5, 0)
-	CloseBtn.BackgroundColor3       = AccentDim
-	CloseBtn.BorderSizePixel        = 0
-	CloseBtn.Font                   = Theme.FontIcon
-	CloseBtn.TextSize               = 16
-	CloseBtn.TextColor3             = Theme.AccentSec
-	CloseBtn.Text                   = "×"
-	CloseBtn.AutoButtonColor        = false
-	CloseBtn.ZIndex                 = 4
-	CloseBtn.Parent                 = Header
-	MakeCorner(CloseBtn, UDim.new(0, 5))
+	local CloseBtn = MakeHeaderChip("×", -8)
 
 	-- Minimize button (shifted left to make room for the close button)
-	local MinBtn = Instance.new("TextButton")
-	MinBtn.Size                   = UDim2.new(0, 28, 0, 20)
-	MinBtn.AnchorPoint            = Vector2.new(1, 0.5)
-	MinBtn.Position               = UDim2.new(1, -8 - 28 - 6, 0.5, 0)
-	MinBtn.BackgroundColor3       = AccentDim
-	MinBtn.BorderSizePixel        = 0
-	MinBtn.Font                   = Theme.FontIcon
-	MinBtn.TextSize               = 16
-	MinBtn.TextColor3             = Theme.AccentSec
-	MinBtn.Text                   = "–"
-	MinBtn.AutoButtonColor        = false
-	MinBtn.ZIndex                 = 4
-	MinBtn.Parent                 = Header
-	MakeCorner(MinBtn, UDim.new(0, 5))
+	local MinBtn = MakeHeaderChip("–", -8 - 28 - 6)
 
 	-- Discord button (optional, off by default)
 	-- Options.Discord = true enables it. Clicking copies the invite link
@@ -446,7 +1363,10 @@ function UILib.CreatePanel(Options)
 		DiscordBtn.AutoButtonColor        = false
 		DiscordBtn.ZIndex                 = 4
 		DiscordBtn.Parent                 = Header
-		MakeCorner(DiscordBtn, UDim.new(0, 5))
+		MakeCorner(DiscordBtn, UDim.new(0, 7))
+		MakeEdge(DiscordBtn, Accent, 1, 0.55)
+		MakeSheen(DiscordBtn, 0.16)
+		MakeRipple(DiscordBtn, Theme.AccentSec, 7)
 
 		local DiscordIcon = Instance.new("ImageLabel")
 		DiscordIcon.Size                   = UDim2.new(0, 14, 0, 14)
@@ -478,8 +1398,13 @@ function UILib.CreatePanel(Options)
 	end
 
 	-- ── Tab bar (optional) ─────────────────────────────────
-	local TabBar, TabBtns, TabUnderline
-	if hasTabs then
+	-- "top"  — horizontal bar of equal-width buttons under the header
+	-- "left" — vertical rail of full-width buttons beside the content
+	local TabBar, TabBtns, TabUnderline, TabInd
+	local tabGrads = {}
+	local tabGap, tabW = 6, 0
+	local SIDE_TAB_H, SIDE_TAB_GAP, SIDE_TAB_TOP = 28, 4, 8
+	if hasTabs and not sideTabs then
 		TabBar = Instance.new("Frame")
 		TabBar.Position               = UDim2.new(0, 0, 0, HEADER_H)
 		TabBar.Size                   = UDim2.new(1, 0, 0, TABBAR_H)
@@ -505,8 +1430,8 @@ function UILib.CreatePanel(Options)
 		-- Every tab gets an equal share of the bar's width instead of
 		-- sizing itself to its own text — long labels can overflow their
 		-- button, which is fine, but the buttons themselves stay uniform.
-		local tabGap = 6
-		local tabW   = (Width - 20 - tabGap * (#Tabs - 1)) / #Tabs
+		tabGap = 6
+		tabW   = (Width - 20 - tabGap * (#Tabs - 1)) / #Tabs
 
 		TabBtns = {}
 		for i, name in ipairs(Tabs) do
@@ -522,12 +1447,93 @@ function UILib.CreatePanel(Options)
 			btn.Text              = "  " .. name .. "  "
 			btn.ZIndex            = 3
 			btn.Parent            = TabBar
-			MakeCorner(btn, UDim.new(0, 6))
-			MakeStroke(btn, AccentDim, 1)
+			MakeCorner(btn, UDim.new(0, 7))
+			MakeEdge(btn, AccentDim, 1)
+			-- One gradient per tab, re-coloured on activation rather than
+			-- created and destroyed, so switching tabs allocates nothing.
+			local g = Instance.new("UIGradient")
+			g.Rotation = 90
+			g.Parent   = btn
+			tabGrads[i] = g
 			local fit = Instance.new("UITextSizeConstraint", btn)
 			fit.MaxTextSize = 12; fit.MinTextSize = 8
 			TabBtns[i] = btn
 		end
+
+		-- The sliding indicator. It lives on Frame, not on TabBar, because
+		-- TabBar is driven by a UIListLayout and any child of it would be
+		-- treated as another tab to lay out.
+		TabInd = Instance.new("Frame")
+		TabInd.Size             = UDim2.new(0, math.floor(tabW), 0, 2)
+		TabInd.Position         = UDim2.new(0, 10, 0, HEADER_H + TABBAR_H - 2)
+		TabInd.BackgroundColor3 = Accent
+		TabInd.BorderSizePixel  = 0
+		TabInd.ZIndex           = 4
+		TabInd.Parent           = Frame
+		MakeCorner(TabInd, UDim.new(1, 0))
+		MakeAccentFill(TabInd, Accent)
+		MakeInnerGlow(TabInd, Accent, 7, 0.40)
+	elseif sideTabs then
+		-- Vertical tab rail on a slightly darker strip so it reads as
+		-- navigation, separated from content by a 1px divider.
+		TabBar = Instance.new("Frame")
+		TabBar.Position               = UDim2.new(0, 0, 0, HEADER_H)
+		TabBar.Size                   = UDim2.new(0, RAIL_W, 1, -HEADER_H)
+		TabBar.BackgroundColor3       = Theme.Bg0
+		TabBar.BackgroundTransparency = 0.35
+		TabBar.BorderSizePixel        = 0
+		TabBar.ZIndex                 = 2
+		TabBar.Parent                 = Frame
+		MakePadding(TabBar, 6, 6, 8, 8)
+		MakeListLayout(TabBar, Enum.FillDirection.Vertical, 4)
+
+		-- Vertical divider between the rail and the content area
+		-- (kept in TabUnderline so minimize/restore hides it too)
+		TabUnderline = Instance.new("Frame")
+		TabUnderline.Size                   = UDim2.new(0, 1, 1, -(HEADER_H + 10))
+		TabUnderline.Position               = UDim2.new(0, RAIL_W, 0, HEADER_H + 5)
+		TabUnderline.BackgroundColor3       = AccentDim
+		TabUnderline.BackgroundTransparency = 0.3
+		TabUnderline.BorderSizePixel        = 0
+		TabUnderline.ZIndex                 = 2
+		TabUnderline.Parent                 = Frame
+
+		TabBtns = {}
+		for i, name in ipairs(Tabs) do
+			local btn = Instance.new("TextButton")
+			btn.Size              = UDim2.new(1, 0, 0, 28)
+			btn.LayoutOrder       = i
+			btn.BackgroundColor3  = Theme.Bg2
+			btn.BorderSizePixel   = 0
+			btn.AutoButtonColor   = false
+			btn.Font              = Theme.FontMedium
+			btn.TextSize          = Theme.SmallSize
+			btn.TextColor3        = Theme.TextMuted
+			btn.TextXAlignment    = Enum.TextXAlignment.Left
+			btn.TextTruncate      = Enum.TextTruncate.AtEnd
+			btn.Text              = name
+			btn.ZIndex            = 3
+			btn.Parent            = TabBar
+			MakeCorner(btn, UDim.new(0, 7))
+			MakeEdge(btn, AccentDim, 1)
+			MakePadding(btn, 12, 6, 0, 0)
+			local g = Instance.new("UIGradient")
+			g.Rotation = 90
+			g.Parent   = btn
+			tabGrads[i] = g
+			TabBtns[i] = btn
+		end
+
+		TabInd = Instance.new("Frame")
+		TabInd.Size             = UDim2.new(0, 3, 0, 16)
+		TabInd.Position         = UDim2.new(0, 2, 0, HEADER_H + SIDE_TAB_TOP + 6)
+		TabInd.BackgroundColor3 = Accent
+		TabInd.BorderSizePixel  = 0
+		TabInd.ZIndex           = 4
+		TabInd.Parent           = Frame
+		MakeCorner(TabInd, UDim.new(1, 0))
+		MakeAccentFill(TabInd, Accent)
+		MakeInnerGlow(TabInd, Accent, 7, 0.40)
 	end
 
 	-- ── Content area ───────────────────────────────────────
@@ -537,12 +1543,13 @@ function UILib.CreatePanel(Options)
 
 	for i = 1, tabCount do
 		local sf = Instance.new("ScrollingFrame")
-		sf.Position               = UDim2.new(0, 0, 0, HEADER_H + TABBAR_H)
-		sf.Size                   = UDim2.new(1, 0, 1, -(HEADER_H + TABBAR_H))
+		sf.Position               = UDim2.new(0, RAIL_W, 0, HEADER_H + TABBAR_H)
+		sf.Size                   = UDim2.new(1, -RAIL_W, 1, -(HEADER_H + TABBAR_H))
 		sf.BackgroundTransparency = 1
 		sf.BorderSizePixel        = 0
-		sf.ScrollBarThickness     = 3
-		sf.ScrollBarImageColor3   = AccentDim
+		sf.ScrollBarThickness     = 4
+		sf.ScrollBarImageColor3   = Accent
+		sf.ScrollBarImageTransparency = 0.45
 		sf.ScrollingDirection     = Enum.ScrollingDirection.Y
 		sf.AutomaticCanvasSize    = Enum.AutomaticSize.Y
 		sf.CanvasSize             = UDim2.new(0, 0, 0, 0)
@@ -555,6 +1562,29 @@ function UILib.CreatePanel(Options)
 	end
 
 	-- ── Tab switching logic ────────────────────────────────
+	-- Active tabs are lit from the top; inactive ones stay almost flat.
+	-- Both live on the same gradient object so the difference is a colour
+	-- swap rather than a structural change.
+	local GRAD_ON = ColorSequence.new({
+		ColorSequenceKeypoint.new(0.00, Color3.new(1.00, 1.00, 1.00)),
+		ColorSequenceKeypoint.new(1.00, Color3.new(0.74, 0.74, 0.74)),
+	})
+	local GRAD_OFF = ColorSequence.new({
+		ColorSequenceKeypoint.new(0.00, Color3.new(1.00, 1.00, 1.00)),
+		ColorSequenceKeypoint.new(1.00, Color3.new(0.93, 0.93, 0.93)),
+	})
+
+	local function tabIndicatorTarget(idx)
+		if sideTabs then
+			local y = HEADER_H + SIDE_TAB_TOP
+			      + (idx - 1) * (SIDE_TAB_H + SIDE_TAB_GAP)
+			      + (SIDE_TAB_H - 16) / 2
+			return UDim2.new(0, 2, 0, math.floor(y))
+		end
+		return UDim2.new(0, math.floor(10 + (idx - 1) * (tabW + tabGap)),
+		                 0, HEADER_H + TABBAR_H - 2)
+	end
+
 	local function applyTabStyle(animate)
 		if not hasTabs then return end
 		for i, btn in ipairs(TabBtns) do
@@ -569,15 +1599,42 @@ function UILib.CreatePanel(Options)
 				btn.TextColor3       = text
 			end
 			btn.Font = on and Theme.FontBold or Theme.FontMedium
+			if tabGrads[i] then
+				tabGrads[i].Color = on and GRAD_ON or GRAD_OFF
+			end
+		end
+		if TabInd then
+			local target = tabIndicatorTarget(activeTab)
+			if animate then
+				-- Quint-out is what sells this as one object gliding to a
+				-- new tab rather than two bars blinking in and out.
+				TweenService:Create(TabInd, TweenSoft, { Position = target }):Play()
+			else
+				TabInd.Position = target
+			end
 		end
 	end
 
+	local lastTab = activeTab
 	local function SetTab(idx)
 		if not hasTabs then return end
+		local dir = (idx > lastTab) and 1 or -1
 		activeTab = idx
 		for i, sf in ipairs(tabFrames) do
 			sf.Visible = (i == idx)
 		end
+
+		-- The incoming page slides in from the side it came from, so tab
+		-- order stays legible instead of every switch looking identical.
+		local sf = tabFrames[idx]
+		if sf and idx ~= lastTab then
+			local restX = RAIL_W
+			sf.Position = UDim2.new(0, restX + dir * 16, 0, HEADER_H + TABBAR_H)
+			TweenService:Create(sf, TweenSoft,
+				{ Position = UDim2.new(0, restX, 0, HEADER_H + TABBAR_H) }):Play()
+		end
+
+		lastTab = idx
 		applyTabStyle(true)
 	end
 
@@ -617,15 +1674,31 @@ function UILib.CreatePanel(Options)
 	local DISCORD_BTN_W = showDiscord and (28 + 6) or 0  -- DiscordBtn.Size.X + gap, if present
 	local BTN_GAP       = 6    -- gap between MinBtn and CloseBtn
 	local MIN_BTN_RIGHT = 8    -- CloseBtn's right margin (see Position above)
-	local TITLE_LEFT    = 14   -- TitleLabel's left offset (see Position above)
 	local TITLE_GAP     = 10   -- breathing room between title text and buttons
 
+	-- Width the panel shrinks to when minimized: enough to hold the pip,
+	-- the title, the subtitle pill (if any) and the header buttons.
+	--
+	-- The title and subtitle are measured *separately, as plain strings,
+	-- with their own font and size*. The previous version measured
+	-- TitleLabel.Text, which — once a SubTitle was supplied — held RichText
+	-- markup (`Foo  <font size="11" color="#...">bar</font>`). TextService
+	-- has no idea those are tags, so it measured ~40 extra characters at
+	-- title size, the result blew past Width, the clamp pinned it to Width,
+	-- and stage 2 of the animation became a no-op: the panel collapsed its
+	-- height and then just sat there at full width, "half minimized".
 	local function computeMinimizedWidth()
-		local ok, bounds = pcall(TextService.GetTextSize, TextService,
-			TitleLabel.Text, Theme.TitleSize, Theme.FontBold, Vector2.new(2000, HEADER_H))
-		local textW = (ok and bounds and bounds.X) or 60
-		local mw = TITLE_LEFT + textW + TITLE_GAP + DISCORD_BTN_W + MIN_BTN_W + BTN_GAP + CLOSE_BTN_W + MIN_BTN_RIGHT
-		return math.clamp(mw, 90, Width)
+		local w = TITLE_X + (SubPill and TitleLabel.Size.X.Offset
+		                     or measureText(plainTitle, Theme.TitleSize, Theme.FontBold))
+		if plainSubTitle ~= "" then
+			w = w + SUB_GAP + SUB_PADX
+			   + measureText(plainSubTitle, Theme.CaptionSize, Theme.FontMedium)
+		end
+		w = w + TITLE_GAP + DISCORD_BTN_W + MIN_BTN_W + BTN_GAP + CLOSE_BTN_W + MIN_BTN_RIGHT
+		-- Clamp to the panel's own width so minimizing never makes the
+		-- window *wider*; a title long enough to hit that ceiling simply
+		-- truncates instead.
+		return math.clamp(math.ceil(w), 90, Width)
 	end
 
 	local isMinimized = Options.Minimized == true
@@ -634,6 +1707,7 @@ function UILib.CreatePanel(Options)
 	local function setBodyVisible(visible)
 		if TabBar       then TabBar.Visible       = visible end
 		if TabUnderline then TabUnderline.Visible = visible end
+		if TabInd       then TabInd.Visible       = visible end
 		if visible then
 			for i, sf in ipairs(tabFrames) do
 				if hasTabs then
@@ -761,6 +1835,29 @@ function UILib.CreatePanel(Options)
 		end)
 	end
 
+	-- ── Visibility (programmatic + optional hotkey) ────────
+	local function SetVisible(visible)
+		Gui.Enabled = visible == true
+	end
+	local function ToggleVisible()
+		Gui.Enabled = not Gui.Enabled
+	end
+	do
+		local tk = Options.ToggleKey
+		if type(tk) == "string" then
+			local ok, parsed = pcall(function() return Enum.KeyCode[tk] end)
+			tk = ok and parsed or nil
+		end
+		if typeof(tk) == "EnumItem" then
+			ConnectScoped(Gui, UserInputService.InputBegan, function(inp, gameProcessed)
+				if gameProcessed then return end
+				if inp.UserInputType == Enum.UserInputType.Keyboard and inp.KeyCode == tk then
+					ToggleVisible()
+				end
+			end)
+		end
+	end
+
 	-- ── Return ─────────────────────────────────────────────
 	return {
 		Gui          = Gui,
@@ -772,8 +1869,30 @@ function UILib.CreatePanel(Options)
 		GetTab       = function(i) return tabFrames[i] end,
 		SetTab       = SetTab,
 		GetActiveTab = function() return activeTab end,
+		GetTabButton = function(i) return TabBtns and TabBtns[i] end,
+		SetTitle     = function(t)
+			plainTitle      = t or ""
+			TitleLabel.Text = plainTitle
+			layoutTitle()
+			if isMinimized then
+				Frame.Size = UDim2.new(0, computeMinimizedWidth(), 0, HEADER_H)
+			end
+		end,
+		SetSubTitle  = function(t)
+			if not SubLabel then return end
+			plainSubTitle  = t or ""
+			SubLabel.Text  = plainSubTitle
+			SubPill.Visible = plainSubTitle ~= ""
+			layoutTitle()
+			if isMinimized then
+				Frame.Size = UDim2.new(0, computeMinimizedWidth(), 0, HEADER_H)
+			end
+		end,
 		SetMinimized = SetMinimized,
 		IsMinimized  = function() return isMinimized end,
+		SetVisible   = SetVisible,
+		ToggleVisible = ToggleVisible,
+		IsVisible    = function() return Gui.Enabled end,
 		CloseBtn     = CloseBtn,
 		Close        = CloseWindow,
 		DiscordBtn   = DiscordBtn,
@@ -791,9 +1910,10 @@ end
 -- Options:
 --   Title     string   Section label
 --   Open      bool     Start open (default false)
+--   Tooltip   string   Hover tooltip (optional)
 --
 -- Returns:
---   { Frame, Content, SetOpen(bool), IsOpen() }
+--   { Frame, Content, SetOpen(bool), IsOpen(), SetTitle(text) }
 -- ============================================================
 function UILib.CreateSection(Parent, Options)
 	Options = Options or {}
@@ -809,7 +1929,8 @@ function UILib.CreateSection(Parent, Options)
 	Wrapper.ClipsDescendants = true
 	Wrapper.Parent           = Parent
 	MakeCorner(Wrapper, UDim.new(0, Theme.CornerRadiusSmall))
-	MakeStroke(Wrapper, Theme.AccentDim, 1)
+	MakeEdge(Wrapper, Theme.AccentDim, 1)
+	MakeGloss(Wrapper, 0.09)
 
 	local WrapLayout = Instance.new("UIListLayout", Wrapper)
 	WrapLayout.Padding    = UDim.new(0, 0)
@@ -832,11 +1953,15 @@ function UILib.CreateSection(Parent, Options)
 
 	-- Accent bar
 	local AccentBar = Instance.new("Frame", HeaderRow)
-	AccentBar.Size             = UDim2.new(0, 3, 0, 16)
-	AccentBar.Position         = UDim2.new(0, 8, 0.5, -8)
+	AccentBar.AnchorPoint      = Vector2.new(0, 0.5)
+	AccentBar.Size             = UDim2.new(0, 3, 0, 12)
+	AccentBar.Position         = UDim2.new(0, 8, 0.5, 0)
 	AccentBar.BackgroundColor3 = Theme.Accent
 	AccentBar.BorderSizePixel  = 0
-	MakeCorner(AccentBar, UDim.new(0, 2))
+	AccentBar.ZIndex           = 2
+	MakeCorner(AccentBar, UDim.new(1, 0))
+	MakeAccentFill(AccentBar, Theme.Accent)
+	local BarGlow = MakeInnerGlow(AccentBar, Theme.Accent, 8, 1)
 
 	local TitleLbl = Instance.new("TextLabel", HeaderRow)
 	TitleLbl.Size                   = UDim2.new(1, -50, 1, 0)
@@ -863,9 +1988,19 @@ function UILib.CreateSection(Parent, Options)
 	local Divider = Instance.new("Frame", Wrapper)
 	Divider.Size             = UDim2.new(1, -16, 0, 1)
 	Divider.Position         = UDim2.new(0, 8, 0, 34)
-	Divider.BackgroundColor3 = Theme.AccentDim
+	Divider.BackgroundColor3 = Theme.Accent
+	Divider.BackgroundTransparency = 0.35
 	Divider.BorderSizePixel  = 0
 	Divider.LayoutOrder      = 1
+	do
+		local g = Instance.new("UIGradient", Divider)
+		g.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0.00, 1),
+			NumberSequenceKeypoint.new(0.15, 0.25),
+			NumberSequenceKeypoint.new(0.85, 0.25),
+			NumberSequenceKeypoint.new(1.00, 1),
+		})
+	end
 
 	-- Content frame
 	local Content = Instance.new("Frame", Wrapper)
@@ -887,18 +2022,30 @@ function UILib.CreateSection(Parent, Options)
 		TweenService:Create(Arrow, TweenMed,
 			{ Rotation   = open and 180 or 0,
 			  TextColor3 = open and Theme.Accent or Theme.AccentDim }):Play()
+		-- The accent bar stretching to full height is the cue that reads
+		-- from across the panel, well before the small chevron does.
+		TweenService:Create(AccentBar, TweenSpring,
+			{ Size = UDim2.new(0, 3, 0, open and 18 or 12) }):Play()
+		TweenService:Create(TitleLbl, TweenFast,
+			{ TextColor3 = open and Theme.AccentSec or Theme.Accent }):Play()
+		if BarGlow then
+			TweenService:Create(BarGlow, TweenMed,
+				{ ImageTransparency = open and 0.45 or 1 }):Play()
+		end
 	end
 	SetOpen(startOpen)
 
 	HeaderRow.MouseButton1Click:Connect(function()
 		SetOpen(not isOpen)
 	end)
+	AttachTooltip(HeaderRow, Options.Tooltip)
 
 	return {
-		Frame   = Wrapper,
-		Content = Content,
-		SetOpen = SetOpen,
-		IsOpen  = function() return isOpen end,
+		Frame    = Wrapper,
+		Content  = Content,
+		SetOpen  = SetOpen,
+		IsOpen   = function() return isOpen end,
+		SetTitle = function(t) TitleLbl.Text = t or "" end,
 	}
 end
 
@@ -912,8 +2059,12 @@ end
 --   TextColor   Color3               (default Theme.TextPrimary)
 --   Height      number               (default 34)
 --   OnClick     function
+--   Tooltip     string   Hover tooltip (optional)
+--   Confirm     bool     First click arms the button ("Confirm?"),
+--                        second click within 2s fires OnClick
+--   ConfirmText string   Armed label (default "Confirm?")
 --
--- Returns: { Frame, Button }
+-- Returns: { Frame, Button, SetText(text), SetDisabled(bool) }
 -- ============================================================
 function UILib.CreateButton(Parent, Options)
 	Options = Options or {}
@@ -923,8 +2074,11 @@ function UILib.CreateButton(Parent, Options)
 	RowBg.BackgroundColor3 = Options.Color or Theme.Bg2
 	RowBg.BorderSizePixel  = 0
 	RowBg.Parent           = Parent
-	MakeCorner(RowBg, UDim.new(0, Theme.CornerRadiusSmall))
-	MakeStroke(RowBg, Theme.AccentDim, 1)
+	local RowRadius = Theme.CornerRadiusSmall
+	MakeCorner(RowBg, UDim.new(0, RowRadius))
+	local RowEdge = MakeEdge(RowBg, Theme.AccentDim, 1)
+	MakeGloss(RowBg, 0.12)
+	local RowGlow = MakeInnerGlow(RowBg, Theme.Accent, 12, 1)
 
 	local Btn = Instance.new("TextButton")
 	Btn.Size                   = UDim2.new(1, 0, 1, 0)
@@ -942,6 +2096,25 @@ function UILib.CreateButton(Parent, Options)
 	Btn.AutoButtonColor        = false
 	Btn.Parent                 = RowBg
 
+	-- The two decorations that do the most work on a button: a ripple
+	-- from the exact click point, and a light sweep on hover. Both build
+	-- their own clipping host so neither can crop the row's stroke.
+	MakeRipple(Btn, Theme.Accent, RowRadius)
+	local playShine = MakeShine(Btn, RowRadius)
+
+	-- A hairline that grows out of the centre on hover. It gives the row
+	-- a focal point, which a uniform background tint never does.
+	local Underline = Instance.new("Frame")
+	Underline.AnchorPoint      = Vector2.new(0.5, 1)
+	Underline.Position         = UDim2.new(0.5, 0, 1, -1)
+	Underline.Size             = UDim2.new(0, 0, 0, 2)
+	Underline.BackgroundColor3 = Theme.Accent
+	Underline.BorderSizePixel  = 0
+	Underline.ZIndex           = 3
+	Underline.Parent           = RowBg
+	MakeCorner(Underline, UDim.new(1, 0))
+	MakeAccentFill(Underline, Theme.Accent)
+
 	local BtnScale = Instance.new("UIScale")
 	BtnScale.Parent = Btn
 
@@ -955,32 +2128,100 @@ function UILib.CreateButton(Parent, Options)
 		math.max(restColor.G * 255 - 8, 0) / 255,
 		math.max(restColor.B * 255 - 8, 0) / 255)
 
+	local disabled = false
+
 	Btn.MouseEnter:Connect(function()
-		TweenService:Create(RowBg,    TweenFast, { BackgroundColor3 = hoverColor }):Play()
-		TweenService:Create(Btn,      TweenFast, { TextColor3 = Theme.Accent }):Play()
-		TweenService:Create(BtnScale, TweenFast, { Scale = 1.02 }):Play()
+		if disabled then return end
+		TweenService:Create(RowBg,     TweenFast, { BackgroundColor3 = hoverColor }):Play()
+		TweenService:Create(Btn,       TweenFast, { TextColor3 = Theme.Accent }):Play()
+		TweenService:Create(BtnScale,  TweenFast, { Scale = 1.02 }):Play()
+		TweenService:Create(RowEdge,   TweenFast, { Color = Theme.Accent, Transparency = 0.05 }):Play()
+		TweenService:Create(Underline, TweenSpring, { Size = UDim2.new(0.5, 0, 0, 2) }):Play()
+		if RowGlow then
+			TweenService:Create(RowGlow, TweenMed, { ImageTransparency = 0.78 }):Play()
+		end
 	end)
 	Btn.MouseLeave:Connect(function()
-		TweenService:Create(RowBg,    TweenFast, { BackgroundColor3 = restColor }):Play()
-		TweenService:Create(Btn,      TweenFast, { TextColor3 = Options.TextColor or Theme.TextPrimary }):Play()
-		TweenService:Create(BtnScale, TweenFast, { Scale = 1 }):Play()
+		if disabled then return end
+		TweenService:Create(RowBg,     TweenFast, { BackgroundColor3 = restColor }):Play()
+		TweenService:Create(Btn,       TweenFast, { TextColor3 = Options.TextColor or Theme.TextPrimary }):Play()
+		TweenService:Create(BtnScale,  TweenFast, { Scale = 1 }):Play()
+		TweenService:Create(RowEdge,   TweenFast, { Color = EdgeRest(), Transparency = Theme.StrokeAlpha or 0.34 }):Play()
+		TweenService:Create(Underline, TweenFast, { Size = UDim2.new(0, 0, 0, 2) }):Play()
+		if RowGlow then
+			TweenService:Create(RowGlow, TweenMed, { ImageTransparency = 1 }):Play()
+		end
 	end)
 	-- Press feedback: dip below rest colour + shrink slightly on press,
 	-- release back to the hover state
 	Btn.MouseButton1Down:Connect(function()
-		TweenService:Create(RowBg,    TweenFast, { BackgroundColor3 = pressColor }):Play()
-		TweenService:Create(BtnScale, TweenFast, { Scale = 0.97 }):Play()
+		if disabled then return end
+		TweenService:Create(RowBg,    TweenSnap, { BackgroundColor3 = pressColor }):Play()
+		TweenService:Create(BtnScale, TweenSnap, { Scale = 0.97 }):Play()
 	end)
 	Btn.MouseButton1Up:Connect(function()
-		TweenService:Create(RowBg,    TweenFast, { BackgroundColor3 = hoverColor }):Play()
+		if disabled then return end
+		TweenService:Create(RowBg,    TweenFast,   { BackgroundColor3 = hoverColor }):Play()
 		TweenService:Create(BtnScale, TweenSpring, { Scale = 1.02 }):Play()
+		-- Re-firing the sweep on release confirms the click landed even
+		-- when the handler itself has nothing visible to show for it.
+		playShine()
 	end)
 
-	if Options.OnClick then
-		Btn.MouseButton1Click:Connect(Options.OnClick)
+	-- Confirm mode: first click arms, second click (within 2s) fires.
+	local armed, armToken = false, 0
+	local baseText = Options.Text or ""
+	local function disarm()
+		armed = false
+		armToken = armToken + 1
+		Btn.Text = baseText
+		TweenService:Create(RowEdge, TweenFast,
+			{ Color = EdgeRest(), Transparency = Theme.StrokeAlpha or 0.34 }):Play()
+		TweenService:Create(Underline, TweenFast, { Size = UDim2.new(0, 0, 0, 2) }):Play()
 	end
 
-	return { Frame = RowBg, Button = Btn }
+	Btn.MouseButton1Click:Connect(function()
+		if disabled then return end
+		if Options.Confirm and not armed then
+			armed = true
+			armToken = armToken + 1
+			local myToken = armToken
+			Btn.Text = Options.ConfirmText or "Confirm?"
+			TweenService:Create(Btn, TweenFast, { TextColor3 = Theme.Warning }):Play()
+			TweenService:Create(RowEdge, TweenFast,
+				{ Color = Theme.Warning, Transparency = 0 }):Play()
+			TweenService:Create(Underline, TweenSpring,
+				{ Size = UDim2.new(0.8, 0, 0, 2) }):Play()
+			task.delay(2, function()
+				if armed and myToken == armToken and Btn.Parent then disarm() end
+			end)
+			return
+		end
+		if armed then disarm() end
+		if Options.OnClick then Options.OnClick() end
+	end)
+
+	AttachTooltip(RowBg, Options.Tooltip)
+	PlayEntrance(RowBg)
+
+	local function SetDisabled(on)
+		disabled = on == true
+		if armed then disarm() end
+		TweenService:Create(Btn,   TweenFast, { TextTransparency = disabled and 0.55 or 0 }):Play()
+		TweenService:Create(RowBg, TweenFast, { BackgroundColor3 = restColor }):Play()
+		TweenService:Create(RowEdge, TweenFast, {
+			Transparency = disabled and 0.75 or (Theme.StrokeAlpha or 0.34),
+			Color        = EdgeRest(),
+		}):Play()
+		Underline.Size = UDim2.new(0, 0, 0, 2)
+	end
+
+	return {
+		Frame       = RowBg,
+		Button      = Btn,
+		SetText     = function(t) baseText = t or ""; if not armed then Btn.Text = baseText end end,
+		SetDisabled = SetDisabled,
+	}
 end
 
 -- ============================================================
@@ -991,8 +2232,10 @@ end
 --   Label        string
 --   Default      bool     Initial state (default false)
 --   OnChanged    function(newState, SetFn)
+--   Tooltip      string   Hover tooltip (optional)
+--   Flag         string   Config key for SaveConfig/LoadConfig
 --
--- Returns: { Frame, Set(bool), GetValue() }
+-- Returns: { Frame, Set(bool), GetValue(), SetDisabled(bool) }
 -- ============================================================
 function UILib.CreateToggle(Parent, Options)
 	Options = Options or {}
@@ -1008,7 +2251,12 @@ function UILib.CreateToggle(Parent, Options)
 	Row.BorderSizePixel  = 0
 	Row.Parent           = Parent
 	MakeCorner(Row, UDim.new(0, Theme.CornerRadiusSmall))
-	MakeStroke(Row, Theme.AccentDim, 1)
+	local RowEdge = MakeEdge(Row, Theme.AccentDim, 1)
+	MakeGloss(Row, 0.10)
+	if state then
+		RowEdge.Color        = Theme.Accent
+		RowEdge.Transparency = 0.18
+	end
 
 	local Lbl = Instance.new("TextLabel", Row)
 	Lbl.Size                   = UDim2.new(1, -(W + 20), 1, 0)
@@ -1028,7 +2276,22 @@ function UILib.CreateToggle(Parent, Options)
 	Track.BackgroundColor3 = state and Theme.ToggleOn or Theme.ToggleOff
 	Track.BorderSizePixel  = 0
 	MakeCorner(Track, UDim.new(1, 0))
-	MakeSheen(Track, 0.18)
+
+	-- One gradient, re-coloured per state. A lit track reads as "on" even
+	-- before the eye registers which end the knob is sitting at.
+	local TRACK_ON = ColorSequence.new({
+		ColorSequenceKeypoint.new(0.00, Color3.new(1.00, 1.00, 1.00)),
+		ColorSequenceKeypoint.new(1.00, Color3.new(0.70, 0.70, 0.70)),
+	})
+	local TRACK_OFF = ColorSequence.new({
+		ColorSequenceKeypoint.new(0.00, Color3.new(0.86, 0.86, 0.86)),
+		ColorSequenceKeypoint.new(1.00, Color3.new(1.00, 1.00, 1.00)),
+	})
+	local TrackGrad = Instance.new("UIGradient")
+	TrackGrad.Rotation = 90
+	TrackGrad.Color    = state and TRACK_ON or TRACK_OFF
+	TrackGrad.Parent   = Track
+	local TrackGlow = MakeInnerGlow(Track, Theme.Accent, 9, state and 0.55 or 1)
 
 	-- Knob
 	local Knob = Instance.new("Frame", Track)
@@ -1038,7 +2301,11 @@ function UILib.CreateToggle(Parent, Options)
 		or  UDim2.new(0, 2,         0.5, -K/2)
 	Knob.BackgroundColor3 = Theme.Knob
 	Knob.BorderSizePixel  = 0
+	Knob.ZIndex           = 2
 	MakeCorner(Knob, UDim.new(1, 0))
+	MakeGloss(Knob, 0.22)
+	local KnobScale = Instance.new("UIScale")
+	KnobScale.Parent = Knob
 
 	-- Invisible click target over entire row
 	local ClickBtn = Instance.new("TextButton", Row)
@@ -1046,6 +2313,8 @@ function UILib.CreateToggle(Parent, Options)
 	ClickBtn.BackgroundTransparency = 1
 	ClickBtn.Text                   = ""
 	ClickBtn.AutoButtonColor        = false
+	ClickBtn.ZIndex                 = 3
+	MakeRipple(ClickBtn, Theme.Accent, Theme.CornerRadiusSmall)
 
 	local function Set(on)
 		state = on
@@ -1055,19 +2324,49 @@ function UILib.CreateToggle(Parent, Options)
 			{ Position = on
 				and UDim2.new(0, W - K - 2, 0.5, -K/2)
 				or  UDim2.new(0, 2,         0.5, -K/2) }):Play()
+		TrackGrad.Color = on and TRACK_ON or TRACK_OFF
+
+		-- A brief overshoot on the knob makes the switch feel physical.
+		KnobScale.Scale = on and 1.16 or 0.88
+		TweenService:Create(KnobScale, TweenPop, { Scale = 1 }):Play()
+
+		if TrackGlow then
+			TweenService:Create(TrackGlow, TweenMed,
+				{ ImageTransparency = on and 0.5 or 1 }):Play()
+		end
+		-- Tinting the row's own outline is what lets a column of toggles
+		-- be read at a glance without inspecting each switch.
+		TweenService:Create(RowEdge, TweenMed, {
+			Color        = on and Theme.Accent or EdgeRest(),
+			Transparency = on and 0.18 or (Theme.StrokeAlpha or 0.34),
+		}):Play()
 	end
 
+	local disabled = false
+
 	ClickBtn.MouseButton1Click:Connect(function()
+		if disabled then return end
 		local newState = not state
 		Set(newState)
 		if Options.OnChanged then Options.OnChanged(newState, Set) end
 	end)
 	ClickBtn.MouseEnter:Connect(function()
+		if disabled then return end
 		TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Hover }):Play()
 	end)
 	ClickBtn.MouseLeave:Connect(function()
 		TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
 	end)
+	AttachTooltip(Row, Options.Tooltip)
+	PlayEntrance(Row)
+
+	local function SetDisabled(on)
+		disabled = on == true
+		local t = disabled and 0.5 or 0
+		TweenService:Create(Lbl,   TweenFast, { TextTransparency = t }):Play()
+		TweenService:Create(Track, TweenFast, { BackgroundTransparency = disabled and 0.4 or 0 }):Play()
+		TweenService:Create(Knob,  TweenFast, { BackgroundTransparency = disabled and 0.4 or 0 }):Play()
+	end
 
 	if Options.Flag then
 		Flags[Options.Flag] = {
@@ -1081,7 +2380,7 @@ function UILib.CreateToggle(Parent, Options)
 		}
 	end
 
-	return { Frame = Row, Set = Set, GetValue = function() return state end }
+	return { Frame = Row, Set = Set, GetValue = function() return state end, SetDisabled = SetDisabled }
 end
 
 -- ============================================================
@@ -1094,7 +2393,10 @@ end
 --   Default      string
 --   Width        number   Box width (default 60)
 --   NumericOnly  bool     Only allow numeric input
+--   MaxLength    number   Hard cap on text length (optional)
 --   OnSubmit     function(text)  called on FocusLost
+--   Tooltip      string   Hover tooltip (optional)
+--   Flag         string   Config key for SaveConfig/LoadConfig
 --
 -- Returns: { Frame, TextBox, GetValue() }
 -- ============================================================
@@ -1108,7 +2410,8 @@ function UILib.CreateTextInput(Parent, Options)
 	Row.BorderSizePixel  = 0
 	Row.Parent           = Parent
 	MakeCorner(Row, UDim.new(0, Theme.CornerRadiusSmall))
-	MakeStroke(Row, Theme.AccentDim, 1)
+	MakeEdge(Row, Theme.AccentDim, 1)
+	MakeGloss(Row, 0.10)
 
 	local Lbl = Instance.new("TextLabel", Row)
 	Lbl.Size                   = UDim2.new(1, -(boxW + 20), 1, 0)
@@ -1134,14 +2437,27 @@ function UILib.CreateTextInput(Parent, Options)
 	Box.TextXAlignment    = Enum.TextXAlignment.Center
 	Box.ClearTextOnFocus  = false
 	Box.Text              = tostring(Options.Default or "")
-	MakeCorner(Box, UDim.new(0, 5))
-	local boxStroke = MakeStroke(Box, Theme.AccentDim, 1)
+	MakeCorner(Box, UDim.new(0, 6))
+	local boxStroke = MakeEdge(Box, Theme.AccentDim, 1)
+	MakeGloss(Box, 0.14)
+	-- A focus ring rather than a focus *outline*: the bloom spills past
+	-- the box, so the focused field wins attention against a dense column
+	-- of rows without the border having to get heavier.
+	local boxGlow = MakeInnerGlow(Box, Theme.Accent, 9, 1)
 
 	Box.Focused:Connect(function()
-		TweenService:Create(boxStroke, TweenFast, { Color = Theme.Accent, Thickness = 1.5 }):Play()
+		TweenService:Create(boxStroke, TweenFast,
+			{ Color = Theme.Accent, Thickness = 1.5, Transparency = 0 }):Play()
+		if boxGlow then
+			TweenService:Create(boxGlow, TweenMed, { ImageTransparency = 0.5 }):Play()
+		end
 	end)
 	Box.FocusLost:Connect(function(ep)
-		TweenService:Create(boxStroke, TweenFast, { Color = Theme.AccentDim, Thickness = 1 }):Play()
+		TweenService:Create(boxStroke, TweenFast,
+			{ Color = EdgeRest(), Thickness = 1, Transparency = Theme.StrokeAlpha or 0.34 }):Play()
+		if boxGlow then
+			TweenService:Create(boxGlow, TweenMed, { ImageTransparency = 1 }):Play()
+		end
 		local val = Box.Text
 		if Options.NumericOnly then
 			local n = tonumber(val:match("%d+"))
@@ -1151,12 +2467,22 @@ function UILib.CreateTextInput(Parent, Options)
 		if Options.OnSubmit then Options.OnSubmit(val) end
 	end)
 
+	if Options.MaxLength then
+		Box:GetPropertyChangedSignal("Text"):Connect(function()
+			if #Box.Text > Options.MaxLength then
+				Box.Text = string.sub(Box.Text, 1, Options.MaxLength)
+			end
+		end)
+	end
+
 	Row.MouseEnter:Connect(function()
 		TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Hover }):Play()
 	end)
 	Row.MouseLeave:Connect(function()
 		TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
 	end)
+	AttachTooltip(Row, Options.Tooltip)
+	PlayEntrance(Row)
 
 	if Options.Flag then
 		Flags[Options.Flag] = {
@@ -1186,8 +2512,11 @@ end
 --   Min        number  (default 0)
 --   Max        number  (default 100)
 --   Default    number
+--   Step       number  Snap values to this increment (optional)
 --   Format     string  string.format pattern (default "%.0f")
 --   OnChanged  function(value)
+--   Tooltip    string  Hover tooltip (optional)
+--   Flag       string  Config key for SaveConfig/LoadConfig
 --
 -- Returns: { Frame, Update(value), GetValue() }
 -- ============================================================
@@ -1204,7 +2533,8 @@ function UILib.CreateSlider(Parent, Options)
 	Row.BorderSizePixel  = 0
 	Row.Parent           = Parent
 	MakeCorner(Row, UDim.new(0, Theme.CornerRadiusSmall))
-	MakeStroke(Row, Theme.AccentDim, 1)
+	MakeEdge(Row, Theme.AccentDim, 1)
+	MakeGloss(Row, 0.10)
 
 	local LabelW = 0
 	if Options.Label and Options.Label ~= "" then
@@ -1222,40 +2552,61 @@ function UILib.CreateSlider(Parent, Options)
 	end
 
 	local ValLbl = Instance.new("TextLabel", Row)
-	ValLbl.Size               = UDim2.new(0, 36, 0, 16)
-	ValLbl.Position           = UDim2.new(1, -40, 0.5, -8)
-	ValLbl.BackgroundTransparency = 1
-	ValLbl.Font               = Theme.FontMedium
-	ValLbl.TextSize           = Theme.SmallSize
-	ValLbl.TextColor3         = Theme.AccentSec
-	ValLbl.TextXAlignment     = Enum.TextXAlignment.Right
+	ValLbl.Size                   = UDim2.new(0, 40, 0, 18)
+	ValLbl.Position               = UDim2.new(1, -46, 0.5, -9)
+	ValLbl.BackgroundColor3       = Theme.InputBg
+	ValLbl.BackgroundTransparency = 0.25
+	ValLbl.BorderSizePixel        = 0
+	ValLbl.Font                   = Theme.FontMedium
+	ValLbl.TextSize               = Theme.SmallSize
+	ValLbl.TextColor3             = Theme.AccentSec
+	ValLbl.TextXAlignment         = Enum.TextXAlignment.Center
+	MakeCorner(ValLbl, UDim.new(0, 5))
+	MakeStroke(ValLbl, Theme.AccentDim, 1).Transparency = 0.5
 
 	local trackX  = LabelW + 14
-	local trackW  = -(LabelW + 58)
+	local trackW  = -(LabelW + 64)
 
 	local Track = Instance.new("Frame", Row)
-	Track.Size             = UDim2.new(1, trackW, 0, 4)
-	Track.Position         = UDim2.new(0, trackX, 0.5, -2)
+	Track.Size             = UDim2.new(1, trackW, 0, 5)
+	Track.Position         = UDim2.new(0, trackX, 0.5, -2.5)
 	Track.BackgroundColor3 = Theme.ToggleOff
 	Track.BorderSizePixel  = 0
 	MakeCorner(Track, UDim.new(1, 0))
+	-- Dark at the top, lighter at the bottom: the inverse of a raised
+	-- surface, which is what makes an empty track read as a groove.
+	do
+		local g = Instance.new("UIGradient", Track)
+		g.Rotation = 90
+		g.Color = ColorSequence.new(Color3.new(0.72, 0.72, 0.72), Color3.new(1, 1, 1))
+	end
 
 	local Fill = Instance.new("Frame", Track)
 	Fill.Size             = UDim2.new(0, 0, 1, 0)
 	Fill.BackgroundColor3 = Theme.Accent
 	Fill.BorderSizePixel  = 0
+	Fill.ClipsDescendants = true
 	MakeCorner(Fill, UDim.new(1, 0))
-	MakeSheen(Fill, 0.20)
+	MakeAccentFill(Fill, Theme.Accent, true)
 
 	local Knob = Instance.new("Frame", Track)
-	Knob.Size             = UDim2.new(0, 12, 0, 12)
+	Knob.Size             = UDim2.new(0, 13, 0, 13)
 	Knob.AnchorPoint      = Vector2.new(0.5, 0.5)
 	Knob.Position         = UDim2.new(0, 0, 0.5, 0)
 	Knob.BackgroundColor3 = Theme.Knob
 	Knob.BorderSizePixel  = 0
+	Knob.ZIndex           = 2
 	MakeCorner(Knob, UDim.new(1, 0))
+	MakeGloss(Knob, 0.22)
+	MakeStroke(Knob, Darken(Theme.Accent, 0.24), 1).Transparency = 0.45
+	local KnobGlow = MakeInnerGlow(Knob, Theme.Accent, 9, 0.62)
+
+	local step = Options.Step
 
 	local function Update(val)
+		if step and step > 0 then
+			val = Min + math.floor((val - Min) / step + 0.5) * step
+		end
 		val = math.clamp(val, Min, Max)
 		cur = val
 		ValLbl.Text = string.format(fmt, val)
@@ -1271,7 +2622,10 @@ function UILib.CreateSlider(Parent, Options)
 		if inp.UserInputType == Enum.UserInputType.MouseButton1
 		or inp.UserInputType == Enum.UserInputType.Touch then
 			dragging = true
-			TweenService:Create(Knob, TweenSpring, { Size = UDim2.new(0, 15, 0, 15) }):Play()
+			TweenService:Create(Knob, TweenSpring, { Size = UDim2.new(0, 17, 0, 17) }):Play()
+			if KnobGlow then
+				TweenService:Create(KnobGlow, TweenFast, { ImageTransparency = 0.32 }):Play()
+			end
 			local x = inp.Position.X
 			Update(Min + ((x - Track.AbsolutePosition.X) / Track.AbsoluteSize.X) * (Max - Min))
 		end
@@ -1280,7 +2634,10 @@ function UILib.CreateSlider(Parent, Options)
 		if inp.UserInputType == Enum.UserInputType.MouseButton1
 		or inp.UserInputType == Enum.UserInputType.Touch then
 			if dragging then
-				TweenService:Create(Knob, TweenFast, { Size = UDim2.new(0, 12, 0, 12) }):Play()
+				TweenService:Create(Knob, TweenSpring, { Size = UDim2.new(0, 13, 0, 13) }):Play()
+				if KnobGlow then
+					TweenService:Create(KnobGlow, TweenMed, { ImageTransparency = 0.62 }):Play()
+				end
 			end
 			dragging = false
 		end
@@ -1299,6 +2656,8 @@ function UILib.CreateSlider(Parent, Options)
 	Row.MouseLeave:Connect(function()
 		TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
 	end)
+	AttachTooltip(Row, Options.Tooltip)
+	PlayEntrance(Row)
 
 	if Options.Flag then
 		Flags[Options.Flag] = {
@@ -1322,6 +2681,7 @@ end
 --   Placeholder string    Placeholder for each box (or function(i))
 --   OnChanged   function(index, value)
 --   Height      number    Scroll area height (default 120)
+--   Flag        string    Config key for SaveConfig/LoadConfig
 --
 -- Returns:
 --   { Frame, GetValues(), SetValue(i, text) }
@@ -1344,7 +2704,8 @@ function UILib.CreateInputList(Parent, Options)
 	Card.ClipsDescendants = true
 	Card.Parent           = Parent
 	MakeCorner(Card, UDim.new(0, Theme.CornerRadiusSmall))
-	MakeStroke(Card, Theme.AccentDim, 1)
+	MakeEdge(Card, Theme.AccentDim, 1)
+	MakeGloss(Card, 0.10)
 
 	-- Header
 	local HeaderRow = Instance.new("Frame", Card)
@@ -1396,7 +2757,8 @@ function UILib.CreateInputList(Parent, Options)
 		Slot.BorderSizePixel        = 0
 		Slot.LayoutOrder            = i
 		MakeCorner(Slot, UDim.new(0, 4))
-		local slotStroke = MakeStroke(Slot, Theme.AccentDim, 1)
+		local slotStroke = MakeEdge(Slot, Theme.AccentDim, 1)
+		MakeGloss(Slot, 0.10)
 
 		local Badge = Instance.new("TextLabel", Slot)
 		Badge.Size                   = UDim2.new(0, 14, 1, 0)
@@ -1430,10 +2792,14 @@ function UILib.CreateInputList(Parent, Options)
 		TB.Text               = values[i]
 
 		TB.Focused:Connect(function()
-			TweenService:Create(slotStroke, TweenFast, { Color = Theme.Accent, Thickness = 1.5 }):Play()
+			TweenService:Create(slotStroke, TweenFast,
+				{ Color = Theme.Accent, Thickness = 1.5, Transparency = 0 }):Play()
+			TweenService:Create(Badge, TweenFast, { TextColor3 = Theme.Accent }):Play()
 		end)
 		TB.FocusLost:Connect(function()
-			TweenService:Create(slotStroke, TweenFast, { Color = Theme.AccentDim, Thickness = 1 }):Play()
+			TweenService:Create(slotStroke, TweenFast,
+				{ Color = EdgeRest(), Thickness = 1, Transparency = Theme.StrokeAlpha or 0.34 }):Play()
+			TweenService:Create(Badge, TweenFast, { TextColor3 = Theme.TextMuted }):Play()
 			values[i] = TB.Text
 			if Options.OnChanged then Options.OnChanged(i, TB.Text) end
 		end)
@@ -1477,9 +2843,12 @@ end
 --
 -- Options:
 --   Height    number   Scroll area height (default 200)
+--   MaxLines  number   Drop the oldest entries beyond this count
+--                      (optional — unlimited when omitted)
 --
 -- Returns:
---   { Frame, Log(msg), Clear() }
+--   { Frame, Log(msg, color?), Clear() }
+--   Log's optional color tints that entry (e.g. red for errors).
 -- ============================================================
 function UILib.CreateStatusLog(Parent, Options)
 	Options = Options or {}
@@ -1503,7 +2872,8 @@ function UILib.CreateStatusLog(Parent, Options)
 	Scroll.CanvasSize             = UDim2.new(0,0,0,0)
 	Scroll.ClipsDescendants       = true
 	MakeCorner(Scroll, UDim.new(0, 5))
-	MakeStroke(Scroll, Theme.AccentDim, 1)
+	MakeEdge(Scroll, Theme.AccentDim, 1)
+	MakeGloss(Scroll, 0.10)
 	MakePadding(Scroll, 4, 4, 4, 4)
 	MakeListLayout(Scroll, Enum.FillDirection.Vertical, 2)
 
@@ -1513,30 +2883,61 @@ function UILib.CreateStatusLog(Parent, Options)
 	ClearRow.BackgroundColor3 = Theme.Bg2
 	ClearRow.BorderSizePixel  = 0
 	MakeCorner(ClearRow, UDim.new(0, 6))
-	MakeStroke(ClearRow, Theme.AccentDim, 1)
+	MakeEdge(ClearRow, Theme.AccentDim, 1)
+	MakeGloss(ClearRow, 0.10)
 
 	local ClearBtn = Instance.new("TextButton", ClearRow)
 	ClearBtn.Size                   = UDim2.new(1, 0, 1, 0)
 	ClearBtn.BackgroundTransparency = 1
-	ClearBtn.Font                   = Theme.FontRegular
+	ClearBtn.Font                   = Theme.FontMedium
 	ClearBtn.TextSize               = Theme.SmallSize
 	ClearBtn.TextColor3             = Theme.TextMuted
 	ClearBtn.Text                   = "Clear Log"
 	ClearBtn.AutoButtonColor        = false
+	MakeRipple(ClearBtn, Theme.Accent, 6)
 
-	local function Log(msg)
+	local entries  = {}
+	local maxLines = Options.MaxLines
+
+	-- Log text is arbitrary, and RichText treats < & > as markup, so the
+	-- message is escaped before the timestamp span is wrapped around it.
+	local function escapeRich(str)
+		str = string.gsub(tostring(str), "&", "&amp;")
+		str = string.gsub(str, "<", "&lt;")
+		str = string.gsub(str, ">", "&gt;")
+		return str
+	end
+
+	local stampHex = ToHex(Theme.TextMuted)
+
+	local function Log(msg, color)
 		local t = (os and os.date) and os.date("%H:%M:%S") or "??"
-		local entry = "[" .. t .. "] " .. msg
 		local lbl = Instance.new("TextLabel", Scroll)
 		lbl.Size                   = UDim2.new(1, -8, 0, 0)
 		lbl.AutomaticSize          = Enum.AutomaticSize.Y
 		lbl.BackgroundTransparency = 1
+		lbl.RichText               = true
 		lbl.Font                   = Enum.Font.Code
-		lbl.TextSize               = 10
-		lbl.TextColor3             = Theme.TextPrimary
+		lbl.TextSize               = 11
+		lbl.TextColor3             = color or Theme.TextPrimary
 		lbl.TextXAlignment         = Enum.TextXAlignment.Left
 		lbl.TextWrapped            = true
-		lbl.Text                   = entry
+		-- Dimming the timestamp lets the eye skip straight to the message
+		-- when scanning a fast-moving log.
+		lbl.Text = string.format("<font color='#%s'>%s</font>  %s",
+			stampHex, t, escapeRich(msg))
+
+		-- New lines fade up rather than snapping in, which makes a busy
+		-- log much easier to follow.
+		lbl.TextTransparency = 1
+		TweenService:Create(lbl, TweenMed, { TextTransparency = 0 }):Play()
+		table.insert(entries, lbl)
+		if maxLines then
+			while #entries > maxLines do
+				local oldest = table.remove(entries, 1)
+				if oldest then oldest:Destroy() end
+			end
+		end
 		task.defer(function()
 			Scroll.CanvasPosition = Vector2.new(0, math.huge)
 		end)
@@ -1546,14 +2947,17 @@ function UILib.CreateStatusLog(Parent, Options)
 		for _, c in ipairs(Scroll:GetChildren()) do
 			if c:IsA("TextLabel") then c:Destroy() end
 		end
+		entries = {}
 	end
 
 	ClearBtn.MouseButton1Click:Connect(Clear)
 	ClearBtn.MouseEnter:Connect(function()
 		TweenService:Create(ClearRow, TweenFast, { BackgroundColor3 = Theme.Hover }):Play()
+		TweenService:Create(ClearBtn, TweenFast, { TextColor3 = Theme.Accent }):Play()
 	end)
 	ClearBtn.MouseLeave:Connect(function()
 		TweenService:Create(ClearRow, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
+		TweenService:Create(ClearBtn, TweenFast, { TextColor3 = Theme.TextMuted }):Play()
 	end)
 
 	return { Frame = Wrapper, Log = Log, Clear = Clear }
@@ -1561,16 +2965,71 @@ end
 
 -- ============================================================
 -- CreateDivider
--- A thin 1px horizontal line.
+-- A thin 1px horizontal line. Pass Options.Text for a labeled
+-- divider (line with a small centered caption).
+--
+-- Options (all optional):
+--   Text   string   Centered caption
+--
+-- Returns the divider Frame.
 -- ============================================================
-function UILib.CreateDivider(Parent)
-	local d = Instance.new("Frame")
-	d.Size             = UDim2.new(1, 0, 0, 1)
-	d.BackgroundColor3 = Theme.AccentDim
-	d.BackgroundTransparency = 0.5
-	d.BorderSizePixel  = 0
-	d.Parent           = Parent
-	return d
+function UILib.CreateDivider(Parent, Options)
+	Options = Options or {}
+
+	-- A rule that stops dead at both edges boxes the content in. Fading
+	-- the ends turns the same one pixel into a separator that belongs to
+	-- the surface it sits on.
+	local function fadeEnds(inst, mid)
+		local g = Instance.new("UIGradient", inst)
+		g.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0.00, 1),
+			NumberSequenceKeypoint.new(0.20, mid),
+			NumberSequenceKeypoint.new(0.80, mid),
+			NumberSequenceKeypoint.new(1.00, 1),
+		})
+		return g
+	end
+
+	if not Options.Text or Options.Text == "" then
+		local d = Instance.new("Frame")
+		d.Size             = UDim2.new(1, 0, 0, 1)
+		d.BackgroundColor3 = Theme.Accent
+		d.BackgroundTransparency = 0.4
+		d.BorderSizePixel  = 0
+		d.Parent           = Parent
+		fadeEnds(d, 0)
+		return d
+	end
+
+	local Holder = Instance.new("Frame")
+	Holder.Size                   = UDim2.new(1, 0, 0, 14)
+	Holder.BackgroundTransparency = 1
+	Holder.BorderSizePixel        = 0
+	Holder.Parent                 = Parent
+
+	local Line = Instance.new("Frame", Holder)
+	Line.Size                   = UDim2.new(1, 0, 0, 1)
+	Line.Position               = UDim2.new(0, 0, 0.5, 0)
+	Line.BackgroundColor3       = Theme.Accent
+	Line.BackgroundTransparency = 0.45
+	Line.BorderSizePixel        = 0
+	fadeEnds(Line, 0)
+
+	-- The caption sits on top of the line and masks it with the panel's
+	-- surface colour, reading as "line — text — line".
+	local Cap = Instance.new("TextLabel", Holder)
+	Cap.AnchorPoint            = Vector2.new(0.5, 0.5)
+	Cap.Position               = UDim2.new(0.5, 0, 0.5, 0)
+	Cap.AutomaticSize          = Enum.AutomaticSize.XY
+	Cap.BackgroundColor3       = Theme.Bg1
+	Cap.BorderSizePixel        = 0
+	Cap.Font                   = Theme.FontMedium
+	Cap.TextSize               = Theme.CaptionSize
+	Cap.TextColor3             = Theme.Accent
+	Cap.Text                   = string.upper(Options.Text)
+	MakePadding(Cap, 10, 10, 1, 1)
+
+	return Holder
 end
 
 -- ============================================================
@@ -1579,14 +3038,15 @@ end
 -- Multiple calls stack vertically.
 --
 -- Args:
---   Title  string
---   Text   string
+--   Title     string
+--   Text      string
+--   Duration  number   Seconds before auto-dismiss (default 2.5)
 -- ============================================================
 local _notifList = {}
 local _notifSg   = nil
-local NOTIF_W    = 250
-local NOTIF_H    = 36
-local NOTIF_PAD  = 6
+local NOTIF_W    = 268
+local NOTIF_H    = 48
+local NOTIF_PAD  = 8
 
 local function _ensureNotifGui()
 	if _notifSg and _notifSg.Parent then return end
@@ -1606,15 +3066,17 @@ local function _repositionNotifs()
 		local f = _notifList[i]
 		if f and f.Parent then
 			local targetY = -(bottomMargin + totalY + NOTIF_H)
-			TweenService:Create(f, TweenMed,
+			TweenService:Create(f, TweenSoft,
 				{ Position = UDim2.new(1, -(NOTIF_W + 12), 1, targetY) }):Play()
 			totalY = totalY + NOTIF_H + NOTIF_PAD
 		end
 	end
 end
 
-function UILib.ShowNotification(Title, Text)
+function UILib.ShowNotification(Title, Text, Duration)
 	_ensureNotifGui()
+
+	local dur = tonumber(Duration) or 2.5
 
 	local F = Instance.new("Frame", _notifSg)
 	F.Size                   = UDim2.new(0, NOTIF_W, 0, NOTIF_H)
@@ -1623,45 +3085,83 @@ function UILib.ShowNotification(Title, Text)
 	F.BackgroundTransparency = 0.04
 	F.BorderSizePixel        = 0
 	F.ClipsDescendants       = true
-	MakeCorner(F, UDim.new(0, Theme.CornerRadiusSmall))
-	MakeStroke(F, Theme.Accent, 1.2)
-	MakeSheen(F, 0.10)
+	MakeCorner(F, UDim.new(0, Theme.CornerRadius))
+	MakeEdge(F, Theme.Accent, 1.2, 0.12)
+	MakeGloss(F, 0.14)
+	MakeGrain(F)
+	-- Banners land over arbitrary game content, so they carry their own
+	-- shadow and bloom instead of relying on the backdrop for contrast.
+	MakeGlow(F, Theme.Accent, 20, 0.84)
 
-	-- Thin accent left bar
+	-- Accent rail down the left edge
 	local Bar = Instance.new("Frame", F)
-	Bar.Size             = UDim2.new(0, 3, 1, -8)
-	Bar.Position         = UDim2.new(0, 0, 0, 4)
+	Bar.Size             = UDim2.new(0, 3, 1, -12)
+	Bar.Position         = UDim2.new(0, 5, 0, 6)
 	Bar.BackgroundColor3 = Theme.Accent
 	Bar.BorderSizePixel  = 0
-	MakeCorner(Bar, UDim.new(0, 2))
+	Bar.ZIndex           = 2
+	MakeCorner(Bar, UDim.new(1, 0))
+	MakeAccentFill(Bar, Theme.Accent)
+	MakeInnerGlow(Bar, Theme.Accent, 8, 0.5)
+
+	-- Title and body on separate lines. Packing both into one truncated
+	-- RichText run meant a long title ate the message; stacked, each gets
+	-- its own budget and its own weight.
+	local TitleLbl = Instance.new("TextLabel", F)
+	TitleLbl.Size                   = UDim2.new(1, -26, 0, 16)
+	TitleLbl.Position               = UDim2.new(0, 16, 0, 8)
+	TitleLbl.BackgroundTransparency = 1
+	TitleLbl.Font                   = Theme.FontBold
+	TitleLbl.TextSize               = Theme.CaptionSize
+	TitleLbl.TextColor3             = Theme.AccentSec
+	TitleLbl.TextXAlignment         = Enum.TextXAlignment.Left
+	TitleLbl.TextTruncate           = Enum.TextTruncate.AtEnd
+	TitleLbl.ZIndex                 = 2
+	TitleLbl.Text                   = (Title or ""):upper()
 
 	local Lbl = Instance.new("TextLabel", F)
-	Lbl.Size               = UDim2.new(1, -16, 1, 0)
-	Lbl.Position           = UDim2.new(0, 10, 0, 0)
+	Lbl.Size                   = UDim2.new(1, -26, 0, 16)
+	Lbl.Position               = UDim2.new(0, 16, 0, 24)
 	Lbl.BackgroundTransparency = 1
-	Lbl.RichText           = true
-	Lbl.Font               = Theme.FontMedium
-	Lbl.TextSize           = Theme.SmallSize
-	Lbl.TextColor3         = Theme.TextPrimary
-	Lbl.TextXAlignment     = Enum.TextXAlignment.Left
-	Lbl.TextTruncate       = Enum.TextTruncate.AtEnd
-	Lbl.Text               = string.format(
-		"<font color='rgb(%d,%d,%d)'><b>%s</b></font>  %s",
-		math.floor(Theme.Accent.R * 255),
-		math.floor(Theme.Accent.G * 255),
-		math.floor(Theme.Accent.B * 255),
-		(Title or ""):upper(), Text or "")
+	Lbl.Font                   = Theme.FontRegular
+	Lbl.TextSize               = Theme.SmallSize
+	Lbl.TextColor3             = Theme.TextPrimary
+	Lbl.TextXAlignment         = Enum.TextXAlignment.Left
+	Lbl.TextTruncate           = Enum.TextTruncate.AtEnd
+	Lbl.ZIndex                 = 2
+	Lbl.Text                   = Text or ""
+
+	-- Countdown rule along the bottom: the banner shows how long it has
+	-- left instead of vanishing without warning.
+	local Timer = Instance.new("Frame", F)
+	Timer.AnchorPoint      = Vector2.new(0, 1)
+	Timer.Size             = UDim2.new(1, 0, 0, 2)
+	Timer.Position         = UDim2.new(0, 0, 1, 0)
+	Timer.BackgroundColor3 = Theme.Accent
+	Timer.BackgroundTransparency = 0.25
+	Timer.BorderSizePixel  = 0
+	Timer.ZIndex           = 3
+	TweenService:Create(Timer, TweenInfo.new(dur, Enum.EasingStyle.Linear),
+		{ Size = UDim2.new(0, 0, 0, 2) }):Play()
+
+	-- Arriving on a Back curve gives the banner a little settle at the
+	-- end of its slide, which is what makes it read as landing.
+	local Pop = Instance.new("UIScale")
+	Pop.Scale  = 0.9
+	Pop.Parent = F
+	TweenService:Create(Pop, TweenPop, { Scale = 1 }):Play()
 
 	table.insert(_notifList, F)
 	_repositionNotifs()
 
 	-- Auto-dismiss
-	task.delay(2.5, function()
+	task.delay(dur, function()
 		if not F.Parent then return end
 		-- Slide out to the right
-		TweenService:Create(F, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+		TweenService:Create(F, TweenInfo.new(0.24, Enum.EasingStyle.Back, Enum.EasingDirection.In),
 			{ Position = UDim2.new(1, 12, F.Position.Y.Scale, F.Position.Y.Offset) }):Play()
-		task.delay(0.22, function()
+		TweenService:Create(Pop, TweenInfo.new(0.24, Enum.EasingStyle.Quad), { Scale = 0.92 }):Play()
+		task.delay(0.26, function()
 			if F.Parent then F:Destroy() end
 			-- Remove from list
 			for i, v in ipairs(_notifList) do
@@ -1736,7 +3236,8 @@ function UILib.CreateParagraph(Parent, Options)
 	Card.BorderSizePixel   = 0
 	Card.Parent            = Parent
 	MakeCorner(Card, UDim.new(0, Theme.CornerRadiusSmall))
-	MakeStroke(Card, Theme.AccentDim, 1)
+	MakeEdge(Card, Theme.AccentDim, 1)
+	MakeGloss(Card, 0.10)
 	MakePadding(Card, 12, 12, 10, 10)
 	MakeListLayout(Card, Enum.FillDirection.Vertical, 4)
 
@@ -1753,6 +3254,21 @@ function UILib.CreateParagraph(Parent, Options)
 		TitleLbl.TextWrapped            = true
 		TitleLbl.LayoutOrder            = 0
 		TitleLbl.Text                   = Options.Title
+
+		-- Layout-safe because Card stacks vertically: the rule is simply
+		-- the next item in the list, not an overlay.
+		local Rule = Instance.new("Frame", Card)
+		Rule.Size                   = UDim2.new(1, 0, 0, 1)
+		Rule.BackgroundColor3       = Theme.Accent
+		Rule.BackgroundTransparency = 0.55
+		Rule.BorderSizePixel        = 0
+		Rule.LayoutOrder            = 1
+		local rg = Instance.new("UIGradient", Rule)
+		rg.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0.00, 0),
+			NumberSequenceKeypoint.new(0.55, 0.45),
+			NumberSequenceKeypoint.new(1.00, 1),
+		})
 	end
 
 	local Body = Instance.new("TextLabel", Card)
@@ -1765,7 +3281,7 @@ function UILib.CreateParagraph(Parent, Options)
 	Body.TextXAlignment         = Enum.TextXAlignment.Left
 	Body.TextYAlignment         = Enum.TextYAlignment.Top
 	Body.TextWrapped            = true
-	Body.LayoutOrder            = 1
+	Body.LayoutOrder            = 2
 	Body.Text                   = Options.Content or Options.Text or ""
 
 	return {
@@ -1801,7 +3317,8 @@ function UILib.CreateProgressBar(Parent, Options)
 	Row.BorderSizePixel  = 0
 	Row.Parent           = Parent
 	MakeCorner(Row, UDim.new(0, Theme.CornerRadiusSmall))
-	MakeStroke(Row, Theme.AccentDim, 1)
+	MakeEdge(Row, Theme.AccentDim, 1)
+	MakeGloss(Row, 0.10)
 	MakePadding(Row, 12, 12, 6, 8)
 
 	local TopRow = Instance.new("Frame", Row)
@@ -1829,17 +3346,26 @@ function UILib.CreateProgressBar(Parent, Options)
 
 	local Track = Instance.new("Frame", Row)
 	Track.Position         = UDim2.new(0, 0, 0, 22)
-	Track.Size             = UDim2.new(1, 0, 0, 6)
+	Track.Size             = UDim2.new(1, 0, 0, 7)
 	Track.BackgroundColor3 = Theme.ToggleOff
 	Track.BorderSizePixel  = 0
 	MakeCorner(Track, UDim.new(1, 0))
+	do
+		local g = Instance.new("UIGradient", Track)
+		g.Rotation = 90
+		g.Color = ColorSequence.new(Color3.new(0.72, 0.72, 0.72), Color3.new(1, 1, 1))
+	end
 
 	local Fill = Instance.new("Frame", Track)
 	Fill.Size             = UDim2.new(0, 0, 1, 0)
 	Fill.BackgroundColor3 = Theme.Accent
 	Fill.BorderSizePixel  = 0
+	Fill.ClipsDescendants = true
 	MakeCorner(Fill, UDim.new(1, 0))
-	MakeSheen(Fill, 0.20)
+	-- The travelling highlight is the difference between a bar that has
+	-- stopped and a bar that is still working.
+	MakeAccentFill(Fill, Theme.Accent, true)
+	MakeInnerGlow(Fill, Theme.Accent, 8, 0.6)
 
 	local function Update(val, instant)
 		val = math.clamp(val, Min, Max)
@@ -1854,8 +3380,14 @@ function UILib.CreateProgressBar(Parent, Options)
 		end
 	end
 	Update(cur, true)
+	PlayEntrance(Row)
 
-	return { Frame = Row, Update = Update, GetValue = function() return cur end }
+	return {
+		Frame    = Row,
+		Update   = Update,
+		GetValue = function() return cur end,
+		SetLabel = function(t) Lbl.Text = t or "" end,
+	}
 end
 
 -- ============================================================
@@ -1959,6 +3491,8 @@ end
 --   Options    table    Array of option strings
 --   Default    number   Initially selected index (default 1)
 --   OnChanged  function(index, value)
+--   Tooltip    string   Hover tooltip (optional)
+--   Flag       string   Config key for SaveConfig/LoadConfig
 --
 -- Returns: { Frame, SetValue(index), GetValue() }
 -- ============================================================
@@ -1974,7 +3508,8 @@ function UILib.CreateGroup(Parent, Options)
 	Card.BorderSizePixel   = 0
 	Card.Parent            = Parent
 	MakeCorner(Card, UDim.new(0, Theme.CornerRadiusSmall))
-	MakeStroke(Card, Theme.AccentDim, 1)
+	MakeEdge(Card, Theme.AccentDim, 1)
+	MakeGloss(Card, 0.10)
 	MakePadding(Card, 8, 8, 8, 8)
 	MakeListLayout(Card, Enum.FillDirection.Vertical, 2)
 
@@ -1991,14 +3526,33 @@ function UILib.CreateGroup(Parent, Options)
 	end
 
 	local rows = {}
+	-- The selected wash is mixed from the palette rather than hard-coded,
+	-- so it lands correctly on every preset instead of only the gold one.
+	local SEL_BG = Mix(Theme.Bg2, Theme.Accent, 0.16)
+
 	local function refresh()
 		for i, row in ipairs(rows) do
 			local on = (i == current)
-			TweenService:Create(row.Dot, TweenFast,
-				{ BackgroundColor3 = on and Theme.Accent or Theme.Bg3 }):Play()
-			TweenService:Create(row.Ring, TweenFast,
-				{ Color = on and Theme.Accent or Theme.AccentDim }):Play()
-			row.Lbl.TextColor3 = on and Theme.ActiveTabText or Theme.TextPrimary
+			TweenService:Create(row.Dot, TweenSpring, {
+				BackgroundColor3 = on and Theme.Accent or Theme.Bg3,
+				Size             = on and UDim2.new(0, 8, 0, 8) or UDim2.new(0, 5, 0, 5),
+			}):Play()
+			TweenService:Create(row.Ring, TweenFast, {
+				Color     = on and Theme.Accent or Theme.AccentDim,
+				Thickness = on and 2 or 1.5,
+			}):Play()
+			TweenService:Create(row.Lbl, TweenFast,
+				{ TextColor3 = on and Theme.ActiveTabText or Theme.TextPrimary }):Play()
+			row.Lbl.Font = on and Theme.FontMedium or Theme.FontRegular
+			-- Selected rows hold a standing wash; hover only borrows the
+			-- row while the pointer is on it.
+			if on then row.Row.BackgroundTransparency = 0 end
+			TweenService:Create(row.Row, TweenFast, {
+				BackgroundColor3       = on and SEL_BG or Theme.Bg2,
+				BackgroundTransparency = on and 0 or 1,
+			}):Play()
+			TweenService:Create(row.Tick, TweenSpring,
+				{ Size = UDim2.new(0, 2, 0, on and 14 or 0) }):Play()
 		end
 	end
 
@@ -2010,11 +3564,20 @@ function UILib.CreateGroup(Parent, Options)
 		Row.BackgroundTransparency = 1
 		Row.AutoButtonColor        = false
 		Row.Text                   = ""
-		MakeCorner(Row, UDim.new(0, 5))
+		MakeCorner(Row, UDim.new(0, 6))
+
+		local Tick = Instance.new("Frame", Row)
+		Tick.AnchorPoint      = Vector2.new(0, 0.5)
+		Tick.Size             = UDim2.new(0, 2, 0, 0)
+		Tick.Position         = UDim2.new(0, 0, 0.5, 0)
+		Tick.BackgroundColor3 = Theme.Accent
+		Tick.BorderSizePixel  = 0
+		Tick.ZIndex           = 2
+		MakeCorner(Tick, UDim.new(1, 0))
 
 		local RingHolder = Instance.new("Frame", Row)
 		RingHolder.Size             = UDim2.new(0, 16, 0, 16)
-		RingHolder.Position         = UDim2.new(0, 2, 0.5, -8)
+		RingHolder.Position         = UDim2.new(0, 6, 0.5, -8)
 		RingHolder.BackgroundColor3 = Theme.Bg3
 		RingHolder.BorderSizePixel  = 0
 		MakeCorner(RingHolder, UDim.new(1, 0))
@@ -2029,16 +3592,17 @@ function UILib.CreateGroup(Parent, Options)
 		MakeCorner(Dot, UDim.new(1, 0))
 
 		local Lbl = Instance.new("TextLabel", Row)
-		Lbl.Size                   = UDim2.new(1, -30, 1, 0)
-		Lbl.Position               = UDim2.new(0, 26, 0, 0)
+		Lbl.Size                   = UDim2.new(1, -34, 1, 0)
+		Lbl.Position               = UDim2.new(0, 30, 0, 0)
 		Lbl.BackgroundTransparency = 1
 		Lbl.Font                   = Theme.FontRegular
 		Lbl.TextSize               = Theme.BodySize
 		Lbl.TextColor3             = Theme.TextPrimary
 		Lbl.TextXAlignment         = Enum.TextXAlignment.Left
+		Lbl.ZIndex                 = 2
 		Lbl.Text                   = text
 
-		rows[i] = { Dot = Dot, Ring = ring, Lbl = Lbl }
+		rows[i] = { Row = Row, Tick = Tick, Dot = Dot, Ring = ring, Lbl = Lbl }
 
 		Row.MouseButton1Click:Connect(function()
 			current = i
@@ -2046,16 +3610,23 @@ function UILib.CreateGroup(Parent, Options)
 			if Options.OnChanged then Options.OnChanged(i, text) end
 		end)
 		Row.MouseEnter:Connect(function()
+			if current == i then return end
 			TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Hover }):Play()
 			Row.BackgroundTransparency = 0
+			TweenService:Create(Tick, TweenSpring, { Size = UDim2.new(0, 2, 0, 8) }):Play()
 		end)
 		Row.MouseLeave:Connect(function()
+			if current == i then return end
 			TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
-			task.delay(0.14, function() Row.BackgroundTransparency = 1 end)
+			TweenService:Create(Tick, TweenFast, { Size = UDim2.new(0, 2, 0, 0) }):Play()
+			task.delay(0.14, function()
+				if current ~= i then Row.BackgroundTransparency = 1 end
+			end)
 		end)
 	end
 
 	refresh()
+	AttachTooltip(Card, Options.Tooltip)
 
 	if Options.Flag then
 		Flags[Options.Flag] = {
@@ -2089,8 +3660,11 @@ end
 --   Multi        bool      Allow multiple selections   (default false)
 --   Placeholder  string    Shown when nothing is selected
 --   OnChanged    function(value)   -- value is a string, or an array if Multi
+--   Tooltip      string    Hover tooltip (optional)
+--   Flag         string    Config key for SaveConfig/LoadConfig
 --
--- Returns: { Frame, SetOpen(bool), GetValue() }
+-- Returns: { Frame, SetOpen(bool), GetValue(),
+--            SetItems(items, keepSelection) }
 -- ============================================================
 function UILib.CreateDropdown(Parent, Options)
 	Options = Options or {}
@@ -2114,7 +3688,8 @@ function UILib.CreateDropdown(Parent, Options)
 	Card.ClipsDescendants  = true
 	Card.Parent            = Parent
 	MakeCorner(Card, UDim.new(0, Theme.CornerRadiusSmall))
-	MakeStroke(Card, Theme.AccentDim, 1)
+	MakeEdge(Card, Theme.AccentDim, 1)
+	MakeGloss(Card, 0.10)
 	local CardLayout = Instance.new("UIListLayout", Card)
 	CardLayout.SortOrder = Enum.SortOrder.LayoutOrder
 	CardLayout.Padding   = UDim.new(0, 0)
@@ -2177,22 +3752,42 @@ function UILib.CreateDropdown(Parent, Options)
 
 	local optRows = {}
 
+	local SEL_BG = Mix(Theme.Bg2, Theme.Accent, 0.16)
+
 	local function refreshLabel()
 		local out = {}
 		for _, val in ipairs(items) do
 			if selected[val] then table.insert(out, val) end
 		end
-		ValueLbl.Text = (#out > 0) and table.concat(out, ", ") or (Options.Placeholder or "Select...")
+		local any = #out > 0
+		ValueLbl.Text = any and table.concat(out, ", ") or (Options.Placeholder or "Select...")
+		-- An empty select should look empty. Painting the placeholder in
+		-- the accent made "nothing chosen" read as a live value.
+		TweenService:Create(ValueLbl, TweenFast,
+			{ TextColor3 = any and Theme.AccentSec or Theme.TextMuted }):Play()
 	end
 
 	local function refreshRows()
 		for val, row in pairs(optRows) do
 			local on = selected[val] == true
-			TweenService:Create(row.Dot, TweenFast,
-				{ BackgroundColor3 = on and Theme.Accent or Theme.Bg3 }):Play()
-			TweenService:Create(row.Ring, TweenFast,
-				{ Color = on and Theme.Accent or Theme.AccentDim }):Play()
-			row.Lbl.TextColor3 = on and Theme.ActiveTabText or Theme.TextPrimary
+			TweenService:Create(row.Dot, TweenSpring, {
+				BackgroundColor3 = on and Theme.Accent or Theme.Bg3,
+				Size             = on and UDim2.new(0, 7, 0, 7) or UDim2.new(0, 4, 0, 4),
+			}):Play()
+			TweenService:Create(row.Ring, TweenFast, {
+				Color     = on and Theme.Accent or Theme.AccentDim,
+				Thickness = on and 2 or 1.5,
+			}):Play()
+			TweenService:Create(row.Lbl, TweenFast,
+				{ TextColor3 = on and Theme.ActiveTabText or Theme.TextPrimary }):Play()
+			row.Lbl.Font = on and Theme.FontMedium or Theme.FontRegular
+			if on then row.Row.BackgroundTransparency = 0 end
+			TweenService:Create(row.Row, TweenFast, {
+				BackgroundColor3       = on and SEL_BG or Theme.Bg2,
+				BackgroundTransparency = on and 0 or 1,
+			}):Play()
+			TweenService:Create(row.Tick, TweenSpring,
+				{ Size = UDim2.new(0, 2, 0, on and 12 or 0) }):Play()
 		end
 	end
 
@@ -2204,6 +3799,18 @@ function UILib.CreateDropdown(Parent, Options)
 			{ Rotation   = open and 180 or 0,
 			  TextColor3 = open and Theme.Accent or Theme.AccentDim }):Play()
 		if open then
+			-- Rows arrive in list order rather than all at once, which is
+			-- what makes an opening dropdown read as unfolding.
+			for _, row in pairs(optRows) do
+				if row.Scale then
+					row.Scale.Scale = 0.94
+					task.delay(math.min((row.Order or 1) * 0.022, 0.22), function()
+						if row.Scale.Parent and isOpen then
+							TweenService:Create(row.Scale, TweenPop, { Scale = 1 }):Play()
+						end
+					end)
+				end
+			end
 			OverlayOpened(Card, function() setOpen(false) end)
 		else
 			OverlayClosed(Card)
@@ -2211,7 +3818,7 @@ function UILib.CreateDropdown(Parent, Options)
 	end
 	Card.Destroying:Connect(function() OverlayClosed(Card) end)
 
-	for i, text in ipairs(items) do
+	local function buildRow(i, text)
 		local Row = Instance.new("TextButton", List)
 		Row.Size                   = UDim2.new(1, 0, 0, 26)
 		Row.LayoutOrder            = i
@@ -2219,11 +3826,25 @@ function UILib.CreateDropdown(Parent, Options)
 		Row.BackgroundTransparency = 1
 		Row.AutoButtonColor        = false
 		Row.Text                   = ""
-		MakeCorner(Row, UDim.new(0, 5))
+		MakeCorner(Row, UDim.new(0, 6))
+
+		-- Created once and reused on every open, so repeatedly toggling
+		-- the list doesn't pile up UIScale instances on each row.
+		local scale = Instance.new("UIScale")
+		scale.Parent = Row
+
+		local Tick = Instance.new("Frame", Row)
+		Tick.AnchorPoint      = Vector2.new(0, 0.5)
+		Tick.Size             = UDim2.new(0, 2, 0, 0)
+		Tick.Position         = UDim2.new(0, 0, 0.5, 0)
+		Tick.BackgroundColor3 = Theme.Accent
+		Tick.BorderSizePixel  = 0
+		Tick.ZIndex           = 2
+		MakeCorner(Tick, UDim.new(1, 0))
 
 		local RingHolder = Instance.new("Frame", Row)
 		RingHolder.Size             = UDim2.new(0, 14, 0, 14)
-		RingHolder.Position         = UDim2.new(0, 5, 0.5, -7)
+		RingHolder.Position         = UDim2.new(0, 8, 0.5, -7)
 		RingHolder.BackgroundColor3 = Theme.Bg3
 		RingHolder.BorderSizePixel  = 0
 		MakeCorner(RingHolder, UDim.new(1, 0))
@@ -2238,16 +3859,18 @@ function UILib.CreateDropdown(Parent, Options)
 		MakeCorner(Dot, UDim.new(1, 0))
 
 		local RLbl = Instance.new("TextLabel", Row)
-		RLbl.Size                   = UDim2.new(1, -28, 1, 0)
-		RLbl.Position               = UDim2.new(0, 30, 0, 0)
+		RLbl.Size                   = UDim2.new(1, -32, 1, 0)
+		RLbl.Position               = UDim2.new(0, 32, 0, 0)
 		RLbl.BackgroundTransparency = 1
 		RLbl.Font                   = Theme.FontRegular
 		RLbl.TextSize               = Theme.SmallSize + 1
 		RLbl.TextColor3             = selected[text] and Theme.ActiveTabText or Theme.TextPrimary
 		RLbl.TextXAlignment         = Enum.TextXAlignment.Left
+		RLbl.ZIndex                 = 2
 		RLbl.Text                   = text
 
-		optRows[text] = { Dot = Dot, Ring = ring, Lbl = RLbl }
+		optRows[text] = { Row = Row, Tick = Tick, Dot = Dot, Ring = ring,
+		                  Lbl = RLbl, Scale = scale, Order = i }
 
 		Row.MouseButton1Click:Connect(function()
 			if multi then
@@ -2270,16 +3893,34 @@ function UILib.CreateDropdown(Parent, Options)
 			if not multi then setOpen(false) end
 		end)
 		Row.MouseEnter:Connect(function()
+			if selected[text] then return end
 			TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Hover }):Play()
 			Row.BackgroundTransparency = 0
+			TweenService:Create(Tick, TweenSpring, { Size = UDim2.new(0, 2, 0, 7) }):Play()
 		end)
 		Row.MouseLeave:Connect(function()
+			if selected[text] then return end
 			TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
-			task.delay(0.14, function() Row.BackgroundTransparency = 1 end)
+			TweenService:Create(Tick, TweenFast, { Size = UDim2.new(0, 2, 0, 0) }):Play()
+			task.delay(0.14, function()
+				if not selected[text] then Row.BackgroundTransparency = 1 end
+			end)
 		end)
 	end
 
+	local function buildRows()
+		for _, row in pairs(optRows) do
+			if row.Row then row.Row:Destroy() end
+		end
+		optRows = {}
+		for i, text in ipairs(items) do
+			buildRow(i, text)
+		end
+	end
+
+	buildRows()
 	refreshLabel()
+	AttachTooltip(Head, Options.Tooltip)
 
 	Head.MouseButton1Click:Connect(function()
 		setOpen(not isOpen)
@@ -2320,6 +3961,22 @@ function UILib.CreateDropdown(Parent, Options)
 		Frame    = Card,
 		SetOpen  = setOpen,
 		GetValue = getValue,
+		-- Replace the option list. Selections for values that still
+		-- exist are kept when keepSelection is true.
+		SetItems = function(newItems, keepSelection)
+			items = newItems or {}
+			if keepSelection then
+				local lookup = {}
+				for _, val in ipairs(items) do lookup[val] = true end
+				for val in pairs(selected) do
+					if not lookup[val] then selected[val] = nil end
+				end
+			else
+				selected = {}
+			end
+			buildRows()
+			refreshLabel()
+		end,
 	}
 end
 
@@ -2332,6 +3989,8 @@ end
 --   Label      string
 --   Default    Enum.KeyCode | string   (e.g. Enum.KeyCode.E or "E")
 --   OnChanged  function(keyCode)
+--   Tooltip    string   Hover tooltip (optional)
+--   Flag       string   Config key for SaveConfig/LoadConfig
 --
 -- Returns: { Frame, Set(keyCode), GetValue() }
 -- ============================================================
@@ -2348,7 +4007,8 @@ function UILib.CreateKeybind(Parent, Options)
 	Row.BorderSizePixel  = 0
 	Row.Parent           = Parent
 	MakeCorner(Row, UDim.new(0, Theme.CornerRadiusSmall))
-	MakeStroke(Row, Theme.AccentDim, 1)
+	MakeEdge(Row, Theme.AccentDim, 1)
+	MakeGloss(Row, 0.10)
 
 	local Lbl = Instance.new("TextLabel", Row)
 	Lbl.Size                   = UDim2.new(1, -90, 1, 0)
@@ -2372,14 +4032,15 @@ function UILib.CreateKeybind(Parent, Options)
 	KeyBtn.AutoButtonColor        = false
 	KeyBtn.Text                   = current and current.Name or "None"
 	MakeCorner(KeyBtn, UDim.new(0, 5))
-	local keyStroke = MakeStroke(KeyBtn, Theme.AccentDim, 1)
+	local keyStroke = MakeEdge(KeyBtn, Theme.AccentDim, 1)
+	MakeGloss(KeyBtn, 0.10)
 
 	local listening = false
 	local conn
 
 	local function stopListening()
 		listening = false
-		TweenService:Create(keyStroke, TweenFast, { Color = Theme.AccentDim, Thickness = 1 }):Play()
+		TweenService:Create(keyStroke, TweenFast, { Color = EdgeRest(), Thickness = 1 }):Play()
 		if conn then conn:Disconnect(); conn = nil end
 	end
 	-- If the row dies while capturing, drop the global InputBegan hook
@@ -2408,6 +4069,8 @@ function UILib.CreateKeybind(Parent, Options)
 	Row.MouseLeave:Connect(function()
 		TweenService:Create(Row, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
 	end)
+	AttachTooltip(Row, Options.Tooltip)
+	PlayEntrance(Row)
 
 	if Options.Flag then
 		Flags[Options.Flag] = {
@@ -2464,16 +4127,18 @@ function UILib.CreateCode(Parent, Options)
 	Card.ClipsDescendants  = true
 	Card.Parent            = Parent
 	MakeCorner(Card, UDim.new(0, Theme.CornerRadiusSmall))
-	MakeStroke(Card, Theme.AccentDim, 1)
+	MakeEdge(Card, Theme.AccentDim, 1)
+	MakeGloss(Card, 0.10)
 	local CardLayout = Instance.new("UIListLayout", Card)
 	CardLayout.SortOrder = Enum.SortOrder.LayoutOrder
 	CardLayout.Padding   = UDim.new(0, 0)
 	if hasHeader then
 		local HeaderRow = Instance.new("Frame", Card)
-		HeaderRow.Size             = UDim2.new(1, 0, 0, 22)
+		HeaderRow.Size             = UDim2.new(1, 0, 0, 24)
 		HeaderRow.LayoutOrder      = 0
 		HeaderRow.BackgroundColor3 = Theme.Bg2
 		HeaderRow.BorderSizePixel  = 0
+		MakeGloss(HeaderRow, 0.16)
 
 		local LangLbl = Instance.new("TextLabel", HeaderRow)
 		LangLbl.Size                   = UDim2.new(1, -54, 1, 0)
@@ -2495,7 +4160,9 @@ function UILib.CreateCode(Parent, Options)
 		CopyBtn.TextColor3             = Theme.TextMuted
 		CopyBtn.Text                   = "Copy"
 		CopyBtn.AutoButtonColor        = false
-		MakeCorner(CopyBtn, UDim.new(0, 4))
+		MakeCorner(CopyBtn, UDim.new(0, 5))
+		MakeEdge(CopyBtn, Theme.AccentDim, 1)
+		MakeRipple(CopyBtn, Theme.Accent, 5)
 
 		CopyBtn.MouseEnter:Connect(function()
 			TweenService:Create(CopyBtn, TweenFast, { TextColor3 = Theme.Accent }):Play()
@@ -2507,8 +4174,13 @@ function UILib.CreateCode(Parent, Options)
 		CopyBtn.MouseButton1Click:Connect(function()
 			if setclipboard then
 				pcall(setclipboard, Options.Text or "")
-				CopyBtn.Text = "Copied"
-				task.delay(1, function() CopyBtn.Text = "Copy" end)
+				CopyBtn.Text       = "Copied"
+				CopyBtn.TextColor3 = Theme.Success
+				task.delay(1, function()
+					if not CopyBtn.Parent then return end
+					CopyBtn.Text       = "Copy"
+					CopyBtn.TextColor3 = Theme.TextMuted
+				end)
 			end
 		end)
 	end
@@ -2571,7 +4243,8 @@ function UILib.CreateImage(Parent, Options)
 	Card.ClipsDescendants  = true
 	Card.Parent            = Parent
 	MakeCorner(Card, UDim.new(0, Theme.CornerRadiusSmall))
-	MakeStroke(Card, Theme.AccentDim, 1)
+	MakeEdge(Card, Theme.AccentDim, 1)
+	MakeGloss(Card, 0.10)
 
 	local Img = Instance.new("ImageLabel", Card)
 	Img.Size                   = UDim2.new(1, 0, 1, 0)
@@ -2610,7 +4283,8 @@ function UILib.CreateVideo(Parent, Options)
 	Card.ClipsDescendants  = true
 	Card.Parent            = Parent
 	MakeCorner(Card, UDim.new(0, Theme.CornerRadiusSmall))
-	MakeStroke(Card, Theme.AccentDim, 1)
+	MakeEdge(Card, Theme.AccentDim, 1)
+	MakeGloss(Card, 0.10)
 
 	local Vid = Instance.new("VideoFrame", Card)
 	Vid.Size             = UDim2.new(1, 0, 0, h)
@@ -2636,7 +4310,8 @@ function UILib.CreateVideo(Parent, Options)
 	PlayBtn.Text             = "Play"
 	PlayBtn.AutoButtonColor  = false
 	MakeCorner(PlayBtn, UDim.new(0, 5))
-	MakeStroke(PlayBtn, Theme.AccentDim, 1)
+	MakeEdge(PlayBtn, Theme.AccentDim, 1)
+	MakeGloss(PlayBtn, 0.10)
 
 	local function updateBtn()
 		PlayBtn.Text = Vid.IsPlaying and "Pause" or "Play"
@@ -2677,7 +4352,8 @@ function UILib.CreateViewport(Parent, Options)
 	Card.ClipsDescendants  = true
 	Card.Parent            = Parent
 	MakeCorner(Card, UDim.new(0, Theme.CornerRadiusSmall))
-	MakeStroke(Card, Theme.AccentDim, 1)
+	MakeEdge(Card, Theme.AccentDim, 1)
+	MakeGloss(Card, 0.10)
 
 	local VP = Instance.new("ViewportFrame", Card)
 	VP.Size                   = UDim2.new(1, 0, 1, 0)
@@ -2736,6 +4412,8 @@ end
 --   Label      string
 --   Default    Color3    (default white)
 --   OnChanged  function(color3)
+--   Tooltip    string    Hover tooltip (optional)
+--   Flag       string    Config key for SaveConfig/LoadConfig
 --
 -- Returns: { Frame, SetOpen(bool), SetValue(color3), GetValue() }
 -- ============================================================
@@ -2752,7 +4430,8 @@ function UILib.CreateColorPicker(Parent, Options)
 	Card.ClipsDescendants  = true
 	Card.Parent            = Parent
 	MakeCorner(Card, UDim.new(0, Theme.CornerRadiusSmall))
-	MakeStroke(Card, Theme.AccentDim, 1)
+	MakeEdge(Card, Theme.AccentDim, 1)
+	MakeGloss(Card, 0.10)
 	local CardLayout = Instance.new("UIListLayout", Card)
 	CardLayout.SortOrder = Enum.SortOrder.LayoutOrder
 	CardLayout.Padding   = UDim.new(0, 0)
@@ -2781,8 +4460,11 @@ function UILib.CreateColorPicker(Parent, Options)
 	Swatch.Size             = UDim2.new(0, 36, 0, 20)
 	Swatch.BackgroundColor3 = current
 	Swatch.BorderSizePixel  = 0
-	MakeCorner(Swatch, UDim.new(0, 5))
-	MakeStroke(Swatch, Theme.AccentDim, 1)
+	MakeCorner(Swatch, UDim.new(0, 6))
+	MakeEdge(Swatch, Theme.AccentDim, 1)
+	-- The swatch blooms in whatever colour it is currently showing, which
+	-- doubles as a preview of that colour against the panel surface.
+	local SwatchGlow = MakeInnerGlow(Swatch, current, 9, 0.55)
 
 	local Panel = Instance.new("Frame", Card)
 	Panel.Size                   = UDim2.new(1, 0, 0, 0)
@@ -2799,7 +4481,8 @@ function UILib.CreateColorPicker(Parent, Options)
 	SVBox.BackgroundColor3  = Color3.fromHSV(h, 1, 1)
 	SVBox.BorderSizePixel   = 0
 	SVBox.ClipsDescendants  = true
-	MakeCorner(SVBox, UDim.new(0, 5))
+	MakeCorner(SVBox, UDim.new(0, 6))
+	MakeStroke(SVBox, Theme.AccentDim, 1).Transparency = 0.4
 
 	local SatOverlay = Instance.new("Frame", SVBox)
 	SatOverlay.Size             = UDim2.new(1, 0, 1, 0)
@@ -2866,7 +4549,8 @@ function UILib.CreateColorPicker(Parent, Options)
 	HexBox.TextColor3        = Theme.AccentSec
 	HexBox.ClearTextOnFocus  = false
 	MakeCorner(HexBox, UDim.new(0, 5))
-	local hexStroke = MakeStroke(HexBox, Theme.AccentDim, 1)
+	local hexStroke = MakeEdge(HexBox, Theme.AccentDim, 1)
+	MakeGloss(HexBox, 0.10)
 
 	HexBox.Focused:Connect(function()
 		TweenService:Create(hexStroke, TweenFast, { Color = Theme.Accent, Thickness = 1.5 }):Play()
@@ -2875,6 +4559,7 @@ function UILib.CreateColorPicker(Parent, Options)
 	local function updateFromHSV(fireEvent)
 		current = Color3.fromHSV(h, s, v)
 		Swatch.BackgroundColor3 = current
+		if SwatchGlow then SwatchGlow.ImageColor3 = current end
 		SVBox.BackgroundColor3  = Color3.fromHSV(h, 1, 1)
 		SVCursor.Position       = UDim2.new(s, 0, 1 - v, 0)
 		HueCursor.Position      = UDim2.new(h, 0, 0.5, 0)
@@ -2926,7 +4611,7 @@ function UILib.CreateColorPicker(Parent, Options)
 	end)
 
 	HexBox.FocusLost:Connect(function()
-		TweenService:Create(hexStroke, TweenFast, { Color = Theme.AccentDim, Thickness = 1 }):Play()
+		TweenService:Create(hexStroke, TweenFast, { Color = EdgeRest(), Thickness = 1 }):Play()
 		local hex = string.gsub(HexBox.Text, "#", "")
 		if #hex == 6 and string.match(hex, "^%x+$") then
 			local r = tonumber(string.sub(hex, 1, 2), 16) / 255
@@ -2954,6 +4639,7 @@ function UILib.CreateColorPicker(Parent, Options)
 	Head.MouseButton1Click:Connect(function()
 		setOpen(not isOpen)
 	end)
+	AttachTooltip(Head, Options.Tooltip)
 
 	if Options.Flag then
 		Flags[Options.Flag] = {
@@ -3127,7 +4813,8 @@ function UILib.CreateCardList(Parent, Options)
 	Wrapper.ClipsDescendants = true
 	Wrapper.Parent           = Parent
 	MakeCorner(Wrapper, UDim.new(0, Theme.CornerRadiusSmall))
-	MakeStroke(Wrapper, Theme.AccentDim, 1)
+	MakeEdge(Wrapper, Theme.AccentDim, 1)
+	MakeGloss(Wrapper, 0.10)
 
 	-- ── ScrollingFrame ────────────────────────────────────────
 	local Scroll = Instance.new("ScrollingFrame", Wrapper)
@@ -3158,27 +4845,37 @@ function UILib.CreateCardList(Parent, Options)
 		end
 	end
 
+	-- Mixed from the live palette. The previous fixed RGB was a gold
+	-- tint, so selection went muddy on every other preset.
+	local CARD_SEL = Mix(Theme.Bg3, Theme.Accent, 0.18)
+
 	local function refreshCard(obj)
 		local on = selectedSet[obj.Index] == true
 		-- Background
 		TweenService:Create(obj.Card, TweenFast, {
-			BackgroundColor3 = on and Color3.fromRGB(38, 30, 10) or Theme.Bg3,
+			BackgroundColor3 = on and CARD_SEL or Theme.Bg3,
 		}):Play()
-		-- Outer stroke
+		-- Outer stroke: a selected card is drawn with a heavier, more
+		-- opaque edge so selection survives a busy list.
 		TweenService:Create(obj.Stroke, TweenFast, {
-			Color = on and Theme.Accent or Theme.AccentDim,
+			Color        = on and Theme.Accent or EdgeRest(),
+			Thickness    = on and 1.6 or 1,
+			Transparency = on and 0.05 or (Theme.StrokeAlpha or 0.34),
 		}):Play()
 		-- Selection dot
 		TweenService:Create(obj.Ring, TweenFast, {
-			Color = on and Theme.Accent or Theme.AccentDim,
+			Color     = on and Theme.Accent or Theme.AccentDim,
+			Thickness = on and 2 or 1.5,
 		}):Play()
-		TweenService:Create(obj.Dot, TweenFast, {
+		TweenService:Create(obj.Dot, TweenSpring, {
 			BackgroundColor3 = on and Theme.Accent or Theme.Bg2,
+			Size             = on and UDim2.new(0, 7, 0, 7) or UDim2.new(0, 4, 0, 4),
 		}):Play()
 		-- Title colour
 		TweenService:Create(obj.TitleLbl, TweenFast, {
 			TextColor3 = on and Theme.AccentSec or Theme.TextPrimary,
 		}):Play()
+		obj.TitleLbl.Font = on and Theme.FontBold or Theme.FontMedium
 	end
 
 	local function buildCard(i, item)
@@ -3201,7 +4898,8 @@ function UILib.CreateCardList(Parent, Options)
 		Card.ClipsDescendants       = true
 		Card.Parent                 = Scroll
 		MakeCorner(Card, UDim.new(0, 6))
-		local stroke = MakeStroke(Card, Theme.AccentDim, 1)
+		local stroke = MakeEdge(Card, Theme.AccentDim, 1)
+		MakeGloss(Card, 0.10)
 		MakePadding(Card, 10, 10, 8, 9)
 
 		-- When CardHeight is fixed we can't use UIListLayout on the card
@@ -3390,14 +5088,163 @@ function UILib.CreateCardList(Parent, Options)
 end
 
 -- ============================================================
+-- CreateLabel
+-- A lightweight single-line text row — for captions, hints and
+-- section lead-ins that don't need a full Paragraph card.
+--
+-- Options:
+--   Text       string
+--   Color      Color3                    (default Theme.TextMuted)
+--   TextSize   number                    (default Theme.SmallSize)
+--   Font       Enum.Font                 (default Theme.FontRegular)
+--   Alignment  Enum.TextXAlignment       (default Left)
+--   Height     number                    (default 18)
+--
+-- Returns: { Frame, Label, SetText(text) }
+-- ============================================================
+function UILib.CreateLabel(Parent, Options)
+	Options = Options or {}
+
+	local Lbl = Instance.new("TextLabel")
+	Lbl.Size                   = UDim2.new(1, 0, 0, Options.Height or 18)
+	Lbl.BackgroundTransparency = 1
+	Lbl.BorderSizePixel        = 0
+	Lbl.Font                   = Options.Font or Theme.FontRegular
+	Lbl.TextSize               = Options.TextSize or Theme.SmallSize
+	Lbl.TextColor3             = Options.Color or Theme.TextMuted
+	Lbl.TextXAlignment         = Options.Alignment or Enum.TextXAlignment.Left
+	Lbl.TextTruncate           = Enum.TextTruncate.AtEnd
+	Lbl.Text                   = Options.Text or ""
+	Lbl.Parent                 = Parent
+
+	return {
+		Frame   = Lbl,
+		Label   = Lbl,
+		SetText = function(t) Lbl.Text = t or "" end,
+	}
+end
+
+-- ============================================================
+-- CreateKeyValue
+-- A compact stat row: muted key on the left, highlighted value
+-- on the right. Ideal for live status readouts.
+--
+-- Options:
+--   Label      string
+--   Value      string | number   Initial value (default "-")
+--   Tooltip    string            Hover tooltip (optional)
+--
+-- Returns: { Frame, SetValue(v), SetLabel(t), GetValue() }
+-- ============================================================
+function UILib.CreateKeyValue(Parent, Options)
+	Options = Options or {}
+	local value = Options.Value ~= nil and tostring(Options.Value) or "-"
+
+	local Row = Instance.new("Frame")
+	Row.Size             = UDim2.new(1, 0, 0, 26)
+	Row.BackgroundColor3 = Theme.Bg2
+	Row.BorderSizePixel  = 0
+	Row.Parent           = Parent
+	MakeCorner(Row, UDim.new(0, Theme.CornerRadiusXs))
+	MakeEdge(Row, Theme.AccentDim, 1)
+	MakeGloss(Row, 0.10)
+
+	local KeyLbl = Instance.new("TextLabel", Row)
+	KeyLbl.Size                   = UDim2.new(0.5, -18, 1, 0)
+	KeyLbl.Position               = UDim2.new(0, 16, 0, 0)
+	KeyLbl.BackgroundTransparency = 1
+	KeyLbl.Font                   = Theme.FontRegular
+	KeyLbl.TextSize               = Theme.SmallSize
+	KeyLbl.TextColor3             = Theme.TextMuted
+	KeyLbl.TextXAlignment         = Enum.TextXAlignment.Left
+	KeyLbl.TextTruncate           = Enum.TextTruncate.AtEnd
+	KeyLbl.Text                   = Options.Label or ""
+
+	local ValLbl = Instance.new("TextLabel", Row)
+	ValLbl.Size                   = UDim2.new(0.5, -14, 1, 0)
+	ValLbl.Position               = UDim2.new(0.5, 2, 0, 0)
+	ValLbl.BackgroundTransparency = 1
+	ValLbl.Font                   = Theme.FontMedium
+	ValLbl.TextSize               = Theme.SmallSize
+	ValLbl.TextColor3             = Theme.AccentSec
+	ValLbl.TextXAlignment         = Enum.TextXAlignment.Right
+	ValLbl.TextTruncate           = Enum.TextTruncate.AtEnd
+	ValLbl.Text                   = value
+
+	-- A stat row is read in bulk, so it gets a marker rather than a
+	-- border: the eye can run down a column of ticks far faster than it
+	-- can pick labels out of a stack of identical boxes.
+	local Tick = Instance.new("Frame", Row)
+	Tick.AnchorPoint      = Vector2.new(0, 0.5)
+	Tick.Size             = UDim2.new(0, 2, 0, 10)
+	Tick.Position         = UDim2.new(0, 7, 0.5, 0)
+	Tick.BackgroundColor3 = Theme.Accent
+	Tick.BackgroundTransparency = 0.35
+	Tick.BorderSizePixel  = 0
+	MakeCorner(Tick, UDim.new(1, 0))
+
+	Row.MouseEnter:Connect(function()
+		TweenService:Create(Row,  TweenFast, { BackgroundColor3 = Theme.Hover }):Play()
+		TweenService:Create(Tick, TweenSpring,
+			{ Size = UDim2.new(0, 2, 0, 16), BackgroundTransparency = 0 }):Play()
+	end)
+	Row.MouseLeave:Connect(function()
+		TweenService:Create(Row,  TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
+		TweenService:Create(Tick, TweenFast,
+			{ Size = UDim2.new(0, 2, 0, 10), BackgroundTransparency = 0.35 }):Play()
+	end)
+
+	AttachTooltip(Row, Options.Tooltip)
+	PlayEntrance(Row)
+
+	return {
+		Frame    = Row,
+		SetValue = function(v)
+			value = tostring(v)
+			ValLbl.Text = value
+			-- A value that just changed should say so; the flash decays
+			-- back to the resting colour on its own.
+			ValLbl.TextColor3 = Lighten(Theme.AccentSec, 0.2)
+			TweenService:Create(ValLbl, TweenSoft,
+				{ TextColor3 = Theme.AccentSec }):Play()
+		end,
+		SetLabel = function(t) KeyLbl.Text = t or "" end,
+		GetValue = function() return value end,
+	}
+end
+
+-- ============================================================
+-- Unload
+-- Destroys every panel, notification and tooltip the library has
+-- created and clears internal state. Safe to call multiple times.
+-- ============================================================
+function UILib.Unload()
+	for _, g in ipairs(_allGuis) do
+		if g and g.Parent then g:Destroy() end
+	end
+	_allGuis = {}
+	if _notifSg then _notifSg:Destroy(); _notifSg = nil end
+	_notifList = {}
+	if _tooltipSg then _tooltipSg:Destroy(); _tooltipSg = nil end
+	_tooltipFrame, _tooltipLbl = nil, nil
+	if _overlayWatch then _overlayWatch:Disconnect(); _overlayWatch = nil end
+	_openOverlay = nil
+	for k in pairs(Flags) do Flags[k] = nil end
+end
+
+-- ============================================================
 -- Convenience lowercase aliases
 -- Exposes each component under a short name in addition to the
 -- primary CreateXxx API, without altering how the components
 -- themselves are implemented.
 -- ============================================================
 UILib.init        = UILib.Init
+UILib.unload      = UILib.Unload
 UILib.saveconfig  = UILib.SaveConfig
 UILib.loadconfig  = UILib.LoadConfig
+UILib.notify      = UILib.ShowNotification
+UILib.label       = UILib.CreateLabel
+UILib.keyvalue    = UILib.CreateKeyValue
 UILib.button      = UILib.CreateButton
 UILib.code        = UILib.CreateCode
 UILib.colorpicker = UILib.CreateColorPicker
