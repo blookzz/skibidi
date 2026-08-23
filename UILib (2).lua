@@ -88,7 +88,7 @@ local Theme = {
 	-- performance budget is tight; nothing else in the library depends
 	-- on them being enabled.
 	Glow             = true,   -- soft accent bloom behind panels/controls
-	GlowStrength     = 0.72,   -- ImageTransparency of the bloom (0 = solid)
+	GlowStrength     = 0.72,   -- transparency of the bloom (0 = solid, 1 = off)
 	AnimatedBorder   = true,   -- slowly rotating gradient on panel strokes
 	BorderSpeed      = 22,     -- degrees per second for the above
 	Ripple           = true,   -- click ripple on buttons/rows
@@ -588,26 +588,90 @@ local function MakeGlow(target, color, spread, transparency)
 	return G
 end
 
--- Inner bloom: same idea but parented *inside* the target and inset
--- negatively, for controls that aren't clipped and don't move on their own
--- (toggle tracks, slider knobs, badges).
+-- Inner bloom: a halo that follows the target's own silhouette.
+--
+-- This used to stretch a single 9-slice shadow image behind the control.
+-- That image's corners are a fixed rounded rectangle, so behind a
+-- pill-shaped toggle track or a circular knob it showed square shoulders
+-- poking out of the shape it was meant to hug. It also sat *over* the
+-- control: under ZIndexBehavior.Sibling a child always draws above its
+-- parent, so the bloom washed across the fill it was framing.
+--
+-- The halo is drawn as a few concentric outlines instead. Each ring copies
+-- the target's own UICorner radius (grown by its own inset), so a pill
+-- glows as a pill and a knob glows as a circle; and because a ring is
+-- hollow, none of it covers the control.
+--
+-- Returns a handle rather than an Instance, since the effect is no longer
+-- one object:  { SetAlpha(alpha, tweenInfo), SetColor(color3) }
+-- alpha 1 = fully hidden, matching the ImageTransparency it replaces.
+--
+-- Three rings is the trade: the old glow was one instance, this is three
+-- frames plus their corner and stroke, on every control that blooms. Four
+-- read marginally smoother and did not justify another 25% of instances.
+local GLOW_RINGS = 3
+
 local function MakeInnerGlow(target, color, spread, transparency)
 	if not Theme.Glow then return nil end
 	spread = spread or 10
-	local G = Instance.new("ImageLabel")
-	G.Name                   = "InnerGlow"
-	G.AnchorPoint            = Vector2.new(0.5, 0.5)
-	G.Position               = UDim2.new(0.5, 0, 0.5, 0)
-	G.Size                   = UDim2.new(1, spread * 2, 1, spread * 2)
-	G.BackgroundTransparency = 1
-	G.Image                  = Theme.ShadowAsset
-	G.ImageColor3            = color or Theme.Accent
-	G.ImageTransparency      = transparency or Theme.GlowStrength
-	G.ScaleType              = Enum.ScaleType.Slice
-	G.SliceCenter            = Rect.new(49, 49, 450, 450)
-	G.ZIndex                 = math.max((target.ZIndex or 1) - 1, 0)
-	G.Parent                 = target
-	return G
+
+	local corner = target:FindFirstChildOfClass("UICorner")
+	local radius = corner and corner.CornerRadius or UDim.new(0, 0)
+	-- A scale radius means pill/circle: it stays correct at any size, so
+	-- the rings inherit it as-is. A fixed radius has to grow with each
+	-- ring or the halo's corners go square while the control's stay round.
+	local isPill = radius.Scale > 0
+
+	local step  = spread / GLOW_RINGS
+	local rings = {}
+
+	for i = 1, GLOW_RINGS do
+		local inset = (i - 1) * step
+
+		local R = Instance.new("Frame")
+		R.Name                   = "GlowRing"
+		R.AnchorPoint            = Vector2.new(0.5, 0.5)
+		R.Position               = UDim2.new(0.5, 0, 0.5, 0)
+		R.Size                   = UDim2.new(1, inset * 2, 1, inset * 2)
+		R.BackgroundTransparency = 1
+		R.BorderSizePixel        = 0
+		R.ZIndex                 = math.max((target.ZIndex or 1) - 1, 0)
+		R.Parent                 = target
+
+		local c = Instance.new("UICorner")
+		c.CornerRadius = isPill and radius or UDim.new(0, radius.Offset + inset)
+		c.Parent       = R
+
+		local st = Instance.new("UIStroke")
+		-- Slightly thicker than the gap so neighbouring rings overlap and
+		-- read as one falloff rather than three visible bands.
+		st.Thickness    = step * 1.6
+		st.Color        = color or Theme.Accent
+		st.LineJoinMode = Enum.LineJoinMode.Round
+		st.Parent       = R
+
+		rings[i] = { Stroke = st, Falloff = (i - 1) / GLOW_RINGS }
+	end
+
+	local handle = {}
+
+	function handle.SetAlpha(alpha, tweenInfo)
+		for _, r in ipairs(rings) do
+			local a = math.clamp(alpha + (1 - alpha) * r.Falloff, 0, 1)
+			if tweenInfo then
+				TweenService:Create(r.Stroke, tweenInfo, { Transparency = a }):Play()
+			else
+				r.Stroke.Transparency = a
+			end
+		end
+	end
+
+	function handle.SetColor(c)
+		for _, r in ipairs(rings) do r.Stroke.Color = c end
+	end
+
+	handle.SetAlpha(transparency or Theme.GlowStrength or 0.5)
+	return handle
 end
 
 -- ── Texture ─────────────────────────────────────────────────
@@ -680,7 +744,13 @@ end
 -- ── Shine sweep ─────────────────────────────────────────────
 -- A slanted highlight that crosses the control once per hover. Returns a
 -- `play` function so callers can also fire it on click or on state change.
-local function MakeShine(target, radius)
+-- `hostParent` is where the clipping host is parented. It defaults to the
+-- target, but a TextButton draws its own label, and under
+-- ZIndexBehavior.Sibling every descendant renders above its parent — so a
+-- host inside the button sweeps across the text and the row's decorations
+-- instead of behind them. Passing the target's own parent instead puts the
+-- sweep on a lower layer, where a lighting effect belongs.
+local function MakeShine(target, radius, hostParent)
 	if not Theme.Shine then return function() end end
 
 	local Host = Instance.new("Frame")
@@ -689,8 +759,8 @@ local function MakeShine(target, radius)
 	Host.BackgroundTransparency = 1
 	Host.BorderSizePixel        = 0
 	Host.ClipsDescendants       = true
-	Host.ZIndex                 = (target.ZIndex or 1)
-	Host.Parent                 = target
+	Host.ZIndex                 = math.max((target.ZIndex or 1) - 1, 0)
+	Host.Parent                 = hostParent or target
 	MakeCorner(Host, UDim.new(0, radius or Theme.CornerRadiusSmall))
 
 	local Bar = Instance.new("Frame")
@@ -1186,7 +1256,6 @@ function UILib.CreatePanel(Options)
 	TitlePip.Parent           = Header
 	MakeCorner(TitlePip, UDim.new(1, 0))
 	MakeAccentFill(TitlePip, Accent)
-	MakeInnerGlow(TitlePip, Accent, 8, 0.42)
 
 	local TITLE_X = 21   -- left edge of the title text (pip + gap)
 
@@ -1472,7 +1541,6 @@ function UILib.CreatePanel(Options)
 		TabInd.Parent           = Frame
 		MakeCorner(TabInd, UDim.new(1, 0))
 		MakeAccentFill(TabInd, Accent)
-		MakeInnerGlow(TabInd, Accent, 7, 0.40)
 	elseif sideTabs then
 		-- Vertical tab rail on a slightly darker strip so it reads as
 		-- navigation, separated from content by a 1px divider.
@@ -1533,7 +1601,6 @@ function UILib.CreatePanel(Options)
 		TabInd.Parent           = Frame
 		MakeCorner(TabInd, UDim.new(1, 0))
 		MakeAccentFill(TabInd, Accent)
-		MakeInnerGlow(TabInd, Accent, 7, 0.40)
 	end
 
 	-- ── Content area ───────────────────────────────────────
@@ -1961,7 +2028,6 @@ function UILib.CreateSection(Parent, Options)
 	AccentBar.ZIndex           = 2
 	MakeCorner(AccentBar, UDim.new(1, 0))
 	MakeAccentFill(AccentBar, Theme.Accent)
-	local BarGlow = MakeInnerGlow(AccentBar, Theme.Accent, 8, 1)
 
 	local TitleLbl = Instance.new("TextLabel", HeaderRow)
 	TitleLbl.Size                   = UDim2.new(1, -50, 1, 0)
@@ -2028,10 +2094,6 @@ function UILib.CreateSection(Parent, Options)
 			{ Size = UDim2.new(0, 3, 0, open and 18 or 12) }):Play()
 		TweenService:Create(TitleLbl, TweenFast,
 			{ TextColor3 = open and Theme.AccentSec or Theme.Accent }):Play()
-		if BarGlow then
-			TweenService:Create(BarGlow, TweenMed,
-				{ ImageTransparency = open and 0.45 or 1 }):Play()
-		end
 	end
 	SetOpen(startOpen)
 
@@ -2100,7 +2162,7 @@ function UILib.CreateButton(Parent, Options)
 	-- from the exact click point, and a light sweep on hover. Both build
 	-- their own clipping host so neither can crop the row's stroke.
 	MakeRipple(Btn, Theme.Accent, RowRadius)
-	local playShine = MakeShine(Btn, RowRadius)
+	local playShine = MakeShine(Btn, RowRadius, RowBg)
 
 	-- A hairline that grows out of the centre on hover. It gives the row
 	-- a focal point, which a uniform background tint never does.
@@ -2137,9 +2199,7 @@ function UILib.CreateButton(Parent, Options)
 		TweenService:Create(BtnScale,  TweenFast, { Scale = 1.02 }):Play()
 		TweenService:Create(RowEdge,   TweenFast, { Color = Theme.Accent, Transparency = 0.05 }):Play()
 		TweenService:Create(Underline, TweenSpring, { Size = UDim2.new(0.5, 0, 0, 2) }):Play()
-		if RowGlow then
-			TweenService:Create(RowGlow, TweenMed, { ImageTransparency = 0.78 }):Play()
-		end
+		if RowGlow then RowGlow.SetAlpha(0.78, TweenMed) end
 	end)
 	Btn.MouseLeave:Connect(function()
 		if disabled then return end
@@ -2148,9 +2208,7 @@ function UILib.CreateButton(Parent, Options)
 		TweenService:Create(BtnScale,  TweenFast, { Scale = 1 }):Play()
 		TweenService:Create(RowEdge,   TweenFast, { Color = EdgeRest(), Transparency = Theme.StrokeAlpha or 0.34 }):Play()
 		TweenService:Create(Underline, TweenFast, { Size = UDim2.new(0, 0, 0, 2) }):Play()
-		if RowGlow then
-			TweenService:Create(RowGlow, TweenMed, { ImageTransparency = 1 }):Play()
-		end
+		if RowGlow then RowGlow.SetAlpha(1, TweenMed) end
 	end)
 	-- Press feedback: dip below rest colour + shrink slightly on press,
 	-- release back to the hover state
@@ -2330,10 +2388,7 @@ function UILib.CreateToggle(Parent, Options)
 		KnobScale.Scale = on and 1.16 or 0.88
 		TweenService:Create(KnobScale, TweenPop, { Scale = 1 }):Play()
 
-		if TrackGlow then
-			TweenService:Create(TrackGlow, TweenMed,
-				{ ImageTransparency = on and 0.5 or 1 }):Play()
-		end
+		if TrackGlow then TrackGlow.SetAlpha(on and 0.5 or 1, TweenMed) end
 		-- Tinting the row's own outline is what lets a column of toggles
 		-- be read at a glance without inspecting each switch.
 		TweenService:Create(RowEdge, TweenMed, {
@@ -2448,16 +2503,12 @@ function UILib.CreateTextInput(Parent, Options)
 	Box.Focused:Connect(function()
 		TweenService:Create(boxStroke, TweenFast,
 			{ Color = Theme.Accent, Thickness = 1.5, Transparency = 0 }):Play()
-		if boxGlow then
-			TweenService:Create(boxGlow, TweenMed, { ImageTransparency = 0.5 }):Play()
-		end
+		if boxGlow then boxGlow.SetAlpha(0.5, TweenMed) end
 	end)
 	Box.FocusLost:Connect(function(ep)
 		TweenService:Create(boxStroke, TweenFast,
 			{ Color = EdgeRest(), Thickness = 1, Transparency = Theme.StrokeAlpha or 0.34 }):Play()
-		if boxGlow then
-			TweenService:Create(boxGlow, TweenMed, { ImageTransparency = 1 }):Play()
-		end
+		if boxGlow then boxGlow.SetAlpha(1, TweenMed) end
 		local val = Box.Text
 		if Options.NumericOnly then
 			local n = tonumber(val:match("%d+"))
@@ -2623,9 +2674,7 @@ function UILib.CreateSlider(Parent, Options)
 		or inp.UserInputType == Enum.UserInputType.Touch then
 			dragging = true
 			TweenService:Create(Knob, TweenSpring, { Size = UDim2.new(0, 17, 0, 17) }):Play()
-			if KnobGlow then
-				TweenService:Create(KnobGlow, TweenFast, { ImageTransparency = 0.32 }):Play()
-			end
+			if KnobGlow then KnobGlow.SetAlpha(0.32, TweenFast) end
 			local x = inp.Position.X
 			Update(Min + ((x - Track.AbsolutePosition.X) / Track.AbsoluteSize.X) * (Max - Min))
 		end
@@ -2635,9 +2684,7 @@ function UILib.CreateSlider(Parent, Options)
 		or inp.UserInputType == Enum.UserInputType.Touch then
 			if dragging then
 				TweenService:Create(Knob, TweenSpring, { Size = UDim2.new(0, 13, 0, 13) }):Play()
-				if KnobGlow then
-					TweenService:Create(KnobGlow, TweenMed, { ImageTransparency = 0.62 }):Play()
-				end
+				if KnobGlow then KnobGlow.SetAlpha(0.62, TweenMed) end
 			end
 			dragging = false
 		end
@@ -3102,7 +3149,6 @@ function UILib.ShowNotification(Title, Text, Duration)
 	Bar.ZIndex           = 2
 	MakeCorner(Bar, UDim.new(1, 0))
 	MakeAccentFill(Bar, Theme.Accent)
-	MakeInnerGlow(Bar, Theme.Accent, 8, 0.5)
 
 	-- Title and body on separate lines. Packing both into one truncated
 	-- RichText run meant a long title ate the message; stacked, each gets
@@ -3365,7 +3411,6 @@ function UILib.CreateProgressBar(Parent, Options)
 	-- The travelling highlight is the difference between a bar that has
 	-- stopped and a bar that is still working.
 	MakeAccentFill(Fill, Theme.Accent, true)
-	MakeInnerGlow(Fill, Theme.Accent, 8, 0.6)
 
 	local function Update(val, instant)
 		val = math.clamp(val, Min, Max)
@@ -4314,14 +4359,14 @@ function UILib.CreateVideo(Parent, Options)
 	MakeGloss(PlayBtn, 0.10)
 
 	local function updateBtn()
-		PlayBtn.Text = Vid.IsPlaying and "Pause" or "Play"
+		PlayBtn.Text = Vid.Playing and "Pause" or "Play"
 	end
 
 	local function Play() Vid:Play(); updateBtn() end
 	local function Pause() Vid:Pause(); updateBtn() end
 
 	PlayBtn.MouseButton1Click:Connect(function()
-		if Vid.IsPlaying then Pause() else Play() end
+		if Vid.Playing then Pause() else Play() end
 	end)
 
 	if Options.Autoplay then Play() else updateBtn() end
@@ -4559,7 +4604,7 @@ function UILib.CreateColorPicker(Parent, Options)
 	local function updateFromHSV(fireEvent)
 		current = Color3.fromHSV(h, s, v)
 		Swatch.BackgroundColor3 = current
-		if SwatchGlow then SwatchGlow.ImageColor3 = current end
+		if SwatchGlow then SwatchGlow.SetColor(current) end
 		SVBox.BackgroundColor3  = Color3.fromHSV(h, 1, 1)
 		SVCursor.Position       = UDim2.new(s, 0, 1 - v, 0)
 		HueCursor.Position      = UDim2.new(h, 0, 0.5, 0)
