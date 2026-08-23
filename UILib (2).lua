@@ -611,9 +611,16 @@ end
 -- read marginally smoother and did not justify another 25% of instances.
 local GLOW_RINGS = 3
 
+-- Every caller's `spread` is scaled by this before the rings are laid out.
+-- Halving the spread halves both the halo's total width and each ring's
+-- stroke, so the combined thickness drops 50% while the rings keep the
+-- same overlap ratio — thinning the strokes alone would open gaps between
+-- them and split the falloff back into three visible bands.
+local GLOW_THICKNESS_SCALE = 0.5
+
 local function MakeInnerGlow(target, color, spread, transparency)
 	if not Theme.Glow then return nil end
-	spread = spread or 10
+	spread = (spread or 10) * GLOW_THICKNESS_SCALE
 
 	local corner = target:FindFirstChildOfClass("UICorner")
 	local radius = corner and corner.CornerRadius or UDim.new(0, 0)
@@ -744,41 +751,45 @@ end
 -- ── Shine sweep ─────────────────────────────────────────────
 -- A slanted highlight that crosses the control once per hover. Returns a
 -- `play` function so callers can also fire it on click or on state change.
--- `hostParent` is where the clipping host is parented. It defaults to the
+-- `hostParent` is where the sweep layer is parented. It defaults to the
 -- target, but a TextButton draws its own label, and under
 -- ZIndexBehavior.Sibling every descendant renders above its parent — so a
--- host inside the button sweeps across the text and the row's decorations
+-- layer inside the button sweeps across the text and the row's decorations
 -- instead of behind them. Passing the target's own parent instead puts the
 -- sweep on a lower layer, where a lighting effect belongs.
+--
+-- The band is a UIGradient travelling across a frame that exactly covers
+-- the control, not a narrow rotated bar sliding through a clipping host.
+-- ClipsDescendants is a screen-axis-aligned scissor that ignores Rotation,
+-- so the old slanted bar was never actually clipped: it spilled past the
+-- button's edges and swept over whatever sat beside it in the row/stack.
+-- A gradient can't leave the frame it paints, so the sweep is now bounded
+-- by construction, and a UICorner keeps it off the rounded corners.
 local function MakeShine(target, radius, hostParent)
 	if not Theme.Shine then return function() end end
 
-	local Host = Instance.new("Frame")
-	Host.Name                   = "ShineHost"
-	Host.Size                   = UDim2.new(1, 0, 1, 0)
-	Host.BackgroundTransparency = 1
-	Host.BorderSizePixel        = 0
-	Host.ClipsDescendants       = true
-	Host.ZIndex                 = math.max((target.ZIndex or 1) - 1, 0)
-	Host.Parent                 = hostParent or target
-	MakeCorner(Host, UDim.new(0, radius or Theme.CornerRadiusSmall))
-
 	local Bar = Instance.new("Frame")
-	Bar.Size                   = UDim2.new(0, 46, 2, 0)
-	Bar.AnchorPoint            = Vector2.new(0.5, 0.5)
-	Bar.Position               = UDim2.new(-0.35, 0, 0.5, 0)
-	Bar.Rotation               = 18
+	Bar.Name                   = "Shine"
+	Bar.Size                   = UDim2.new(1, 0, 1, 0)
 	Bar.BackgroundColor3       = Color3.new(1, 1, 1)
 	Bar.BorderSizePixel        = 0
-	Bar.ZIndex                 = Host.ZIndex
-	Bar.Parent                 = Host
+	Bar.ZIndex                 = math.max((target.ZIndex or 1) - 1, 0)
+	Bar.Parent                 = hostParent or target
+	MakeCorner(Bar, UDim.new(0, radius or Theme.CornerRadiusSmall))
 
-	-- Feather both edges so it reads as light, not as a white rectangle.
+	-- Rotating the gradient (rather than the frame) is what slants the
+	-- band. Feathered on both sides so it reads as light, not as a white
+	-- rectangle, and fully transparent at either end so the frame is
+	-- invisible while the sweep is parked off-edge.
 	local grad = Instance.new("UIGradient")
+	grad.Rotation     = 18
+	grad.Offset       = Vector2.new(-1, 0)
 	grad.Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0.0, 1),
-		NumberSequenceKeypoint.new(0.5, 0.80),
-		NumberSequenceKeypoint.new(1.0, 1),
+		NumberSequenceKeypoint.new(0.00, 1),
+		NumberSequenceKeypoint.new(0.42, 1),
+		NumberSequenceKeypoint.new(0.50, 0.80),
+		NumberSequenceKeypoint.new(0.58, 1),
+		NumberSequenceKeypoint.new(1.00, 1),
 	})
 	grad.Parent = Bar
 
@@ -786,10 +797,10 @@ local function MakeShine(target, radius, hostParent)
 	local function play()
 		if playing or not Bar.Parent then return end
 		playing = true
-		Bar.Position = UDim2.new(-0.35, 0, 0.5, 0)
-		local t = TweenService:Create(Bar,
+		grad.Offset = Vector2.new(-1, 0)
+		local t = TweenService:Create(grad,
 			TweenInfo.new(0.55, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-			{ Position = UDim2.new(1.35, 0, 0.5, 0) })
+			{ Offset = Vector2.new(1, 0) })
 		t.Completed:Connect(function() playing = false end)
 		t:Play()
 	end
@@ -2176,8 +2187,9 @@ function UILib.CreateButton(Parent, Options)
 	Btn.Parent                 = RowBg
 
 	-- The two decorations that do the most work on a button: a ripple
-	-- from the exact click point, and a light sweep on hover. Both build
-	-- their own clipping host so neither can crop the row's stroke.
+	-- from the exact click point, and a light sweep on hover. Both stay
+	-- inside their own layer, so neither crops the row's stroke nor
+	-- spills past the row's edges.
 	MakeRipple(Btn, Theme.Accent, RowRadius)
 	local playShine = MakeShine(Btn, RowRadius, RowBg)
 
@@ -4831,325 +4843,6 @@ function UILib.LoadConfig(name)
 end
 
 -- ============================================================
--- CreateCardList
--- A scrollable list of selectable cards.  Each card has a big
--- title and a smaller description line.  Clicking a card calls
--- OnSelect, and the card is toggled into a highlighted selected
--- state.  Multiple cards can be selected simultaneously.
---
--- Options:
---   Items        table   Array of { Title, Description } tables
---   Multi        bool    Allow multiple selections (default true)
---   Height       number  Fixed scroll-frame height (default 220)
---   OnSelect     function(index, title, selected)
---                        Called when a card is toggled.
---                        `selected` is the new state of *this* card.
---   OnChange     function(selectedIndices)
---                        Called after any selection change with the
---                        full array of currently selected indices.
---
--- Returns:
---   {
---     Frame,
---     GetSelected()            → table of selected indices (sorted)
---     SetSelected(indices)     → set selection programmatically
---     ClearSelected()          → deselect all
---     SetItems(items)          → replace the whole list
---   }
--- ============================================================
-function UILib.CreateCardList(Parent, Options)
-	Options = Options or {}
-	local multi    = Options.Multi ~= false   -- default true
-	local items    = Options.Items or {}
-	local listH    = Options.Height or 220      -- height of the scroll container (px)
-	local cardH    = Options.CardHeight         -- fixed card height (px); nil = auto-size
-
-	-- Selected state: index → bool
-	local selectedSet = {}
-
-	-- ── Outer wrapper ─────────────────────────────────────────
-	local Wrapper = Instance.new("Frame")
-	Wrapper.Size             = UDim2.new(1, 0, 0, listH)
-	Wrapper.BackgroundColor3 = Theme.Bg2
-	Wrapper.BorderSizePixel  = 0
-	Wrapper.ClipsDescendants = true
-	Wrapper.Parent           = Parent
-	MakeCorner(Wrapper, UDim.new(0, Theme.CornerRadiusSmall))
-	MakeEdge(Wrapper, Theme.AccentDim, 1)
-	MakeGloss(Wrapper, 0.10)
-
-	-- ── ScrollingFrame ────────────────────────────────────────
-	local Scroll = Instance.new("ScrollingFrame", Wrapper)
-	Scroll.Size                    = UDim2.new(1, 0, 1, 0)
-	Scroll.BackgroundTransparency  = 1
-	Scroll.BorderSizePixel         = 0
-	Scroll.ScrollBarThickness      = 3
-	Scroll.ScrollBarImageColor3    = Theme.AccentDim
-	Scroll.CanvasSize              = UDim2.new(0, 0, 0, 0)
-	Scroll.AutomaticCanvasSize     = Enum.AutomaticSize.Y
-	Scroll.VerticalScrollBarInset  = Enum.ScrollBarInset.ScrollBar
-	Scroll.ClipsDescendants        = true
-	MakePadding(Scroll, 6, 6, 6, 6)
-	MakeListLayout(Scroll, Enum.FillDirection.Vertical, 5)
-
-	-- ── Card builder ──────────────────────────────────────────
-	local cardObjects = {}   -- index → { Card, TitleLbl, DescLbl, Dot, Stroke, Index }
-
-	local function fireCallbacks(idx, newState)
-		if Options.OnSelect then
-			Options.OnSelect(idx, items[idx] and items[idx].Title or "", newState)
-		end
-		if Options.OnChange then
-			local sel = {}
-			for i in pairs(selectedSet) do table.insert(sel, i) end
-			table.sort(sel)
-			Options.OnChange(sel)
-		end
-	end
-
-	-- Mixed from the live palette. The previous fixed RGB was a gold
-	-- tint, so selection went muddy on every other preset.
-	local CARD_SEL = Mix(Theme.Bg3, Theme.Accent, 0.18)
-
-	local function refreshCard(obj)
-		local on = selectedSet[obj.Index] == true
-		-- Background
-		TweenService:Create(obj.Card, TweenFast, {
-			BackgroundColor3 = on and CARD_SEL or Theme.Bg3,
-		}):Play()
-		-- Outer stroke: a selected card is drawn with a heavier, more
-		-- opaque edge so selection survives a busy list.
-		TweenService:Create(obj.Stroke, TweenFast, {
-			Color        = on and Theme.Accent or EdgeRest(),
-			Thickness    = on and 1.6 or 1,
-			Transparency = on and 0.05 or (Theme.StrokeAlpha or 0.34),
-		}):Play()
-		-- Selection dot
-		TweenService:Create(obj.Ring, TweenFast, {
-			Color     = on and Theme.Accent or Theme.AccentDim,
-			Thickness = on and 2 or 1.5,
-		}):Play()
-		TweenService:Create(obj.Dot, TweenSpring, {
-			BackgroundColor3 = on and Theme.Accent or Theme.Bg2,
-			Size             = on and UDim2.new(0, 7, 0, 7) or UDim2.new(0, 4, 0, 4),
-		}):Play()
-		-- Title colour
-		TweenService:Create(obj.TitleLbl, TweenFast, {
-			TextColor3 = on and Theme.AccentSec or Theme.TextPrimary,
-		}):Play()
-		obj.TitleLbl.Font = on and Theme.FontBold or Theme.FontMedium
-	end
-
-	local function buildCard(i, item)
-		item = item or {}
-		local Card = Instance.new("TextButton")
-		if cardH then
-			-- Fixed card height: scroll container is independent of card content
-			Card.Size          = UDim2.new(1, 0, 0, cardH)
-			Card.AutomaticSize = Enum.AutomaticSize.None
-		else
-			-- Auto-size: card grows to fit its title + description text
-			Card.Size          = UDim2.new(1, 0, 0, 0)
-			Card.AutomaticSize = Enum.AutomaticSize.Y
-		end
-		Card.BackgroundColor3       = Theme.Bg3
-		Card.BorderSizePixel        = 0
-		Card.AutoButtonColor        = false
-		Card.Text                   = ""
-		Card.LayoutOrder            = i
-		Card.ClipsDescendants       = true
-		Card.Parent                 = Scroll
-		MakeCorner(Card, UDim.new(0, 6))
-		local stroke = MakeEdge(Card, Theme.AccentDim, 1)
-		MakeGloss(Card, 0.10)
-		MakePadding(Card, 10, 10, 8, 9)
-
-		-- When CardHeight is fixed we can't use UIListLayout on the card
-		-- (it has no way to stretch DescLbl into remaining space).
-		-- Instead: TitleRow sits at the top with a fixed height; DescLbl
-		-- is positioned below it and fills the rest of the card.
-		local TITLE_ROW_H = 20
-
-		if not cardH then
-			MakeListLayout(Card, Enum.FillDirection.Vertical, 3)
-		end
-
-		-- Row: selection ring/dot + title
-		local TitleRow = Instance.new("Frame", Card)
-		if cardH then
-			TitleRow.Size     = UDim2.new(1, 0, 0, TITLE_ROW_H)
-			TitleRow.Position = UDim2.new(0, 0, 0, 0)
-		else
-			TitleRow.Size          = UDim2.new(1, 0, 0, 0)
-			TitleRow.AutomaticSize = Enum.AutomaticSize.Y
-		end
-		TitleRow.BackgroundTransparency = 1
-		TitleRow.LayoutOrder            = 0
-		MakeListLayout(TitleRow, Enum.FillDirection.Horizontal, 8,
-			Enum.HorizontalAlignment.Left, Enum.VerticalAlignment.Center)
-
-		-- Ring + dot (same visual language as Group / Dropdown)
-		local RingHolder = Instance.new("Frame", TitleRow)
-		RingHolder.Size             = UDim2.new(0, 14, 0, 14)
-		RingHolder.BackgroundColor3 = Theme.Bg2
-		RingHolder.BorderSizePixel  = 0
-		RingHolder.LayoutOrder      = 0
-		MakeCorner(RingHolder, UDim.new(1, 0))
-		local ring = MakeStroke(RingHolder, Theme.AccentDim, 1.5)
-
-		local Dot = Instance.new("Frame", RingHolder)
-		Dot.AnchorPoint      = Vector2.new(0.5, 0.5)
-		Dot.Position         = UDim2.new(0.5, 0, 0.5, 0)
-		Dot.Size             = UDim2.new(0, 7, 0, 7)
-		Dot.BackgroundColor3 = Theme.Bg2
-		Dot.BorderSizePixel  = 0
-		MakeCorner(Dot, UDim.new(1, 0))
-
-		local TitleLbl = Instance.new("TextLabel", TitleRow)
-		TitleLbl.Size                   = UDim2.new(1, -(14 + 8), 0, 0)
-		TitleLbl.AutomaticSize          = Enum.AutomaticSize.Y
-		TitleLbl.BackgroundTransparency = 1
-		TitleLbl.Font                   = Theme.FontMedium
-		TitleLbl.TextSize               = Theme.BodySize + 1
-		TitleLbl.TextColor3             = Theme.TextPrimary
-		TitleLbl.TextXAlignment         = Enum.TextXAlignment.Left
-		TitleLbl.TextWrapped            = true
-		TitleLbl.LayoutOrder            = 1
-		TitleLbl.Text                   = item.Title or ""
-
-		-- Description line
-		local DescLbl = Instance.new("TextLabel", Card)
-		if cardH then
-			-- Position below TitleRow, fill remaining card height
-			local pad = 8 + 9   -- top + bottom padding from MakePadding
-			local gap = 3
-			DescLbl.Position      = UDim2.new(0, 0, 0, TITLE_ROW_H + gap)
-			DescLbl.Size          = UDim2.new(1, 0, 0, cardH - pad - TITLE_ROW_H - gap)
-			DescLbl.AutomaticSize = Enum.AutomaticSize.None
-		else
-			DescLbl.Size          = UDim2.new(1, 0, 0, 0)
-			DescLbl.AutomaticSize = Enum.AutomaticSize.Y
-		end
-		DescLbl.BackgroundTransparency = 1
-		DescLbl.Font                   = Theme.FontRegular
-		DescLbl.TextSize               = Theme.SmallSize
-		DescLbl.TextColor3             = Theme.TextMuted
-		DescLbl.TextXAlignment         = Enum.TextXAlignment.Left
-		DescLbl.TextYAlignment         = Enum.TextYAlignment.Top
-		DescLbl.TextWrapped            = true
-		DescLbl.LayoutOrder            = 1
-		DescLbl.Text                   = item.Description or ""
-
-		local obj = {
-			Card     = Card,
-			TitleLbl = TitleLbl,
-			DescLbl  = DescLbl,
-			Dot      = Dot,
-			Ring     = ring,
-			Stroke   = stroke,
-			Index    = i,
-		}
-		cardObjects[i] = obj
-
-		-- Hover feedback (inset fill, same pattern as other heads)
-		-- Hover fill must escape the card's UIPadding (10,10,8,9) to cover
-		-- the full card. We negate the padding in size and position manually.
-		local hf = Instance.new("Frame")
-		hf.Size                   = UDim2.new(1, 10 + 10, 1, 8 + 9)
-		hf.Position               = UDim2.new(0, -10, 0, -8)
-		hf.BackgroundColor3       = Theme.Bg2
-		hf.BackgroundTransparency = 1
-		hf.BorderSizePixel        = 0
-		hf.ZIndex                 = 0
-		hf.Parent                 = Card
-		MakeCorner(hf, UDim.new(0, 6))
-		Card.MouseEnter:Connect(function()
-			TweenService:Create(hf, TweenFast, { BackgroundColor3 = Theme.Hover }):Play()
-			hf.BackgroundTransparency = 0
-		end)
-		Card.MouseLeave:Connect(function()
-			TweenService:Create(hf, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
-			task.delay(0.14, function() hf.BackgroundTransparency = 1 end)
-		end)
-
-		Card.MouseButton1Click:Connect(function()
-			if multi then
-				if selectedSet[i] then
-					selectedSet[i] = nil
-				else
-					selectedSet[i] = true
-				end
-			else
-				-- single-select: deselect everyone else first
-				for j, o in pairs(cardObjects) do
-					if j ~= i and selectedSet[j] then
-						selectedSet[j] = nil
-						refreshCard(o)
-					end
-				end
-				if selectedSet[i] then
-					selectedSet[i] = nil
-				else
-					selectedSet[i] = true
-				end
-			end
-			refreshCard(obj)
-			fireCallbacks(i, selectedSet[i] == true)
-		end)
-
-		return obj
-	end
-
-	local function buildAll(newItems)
-		-- Destroy existing cards
-		for _, obj in pairs(cardObjects) do
-			obj.Card:Destroy()
-		end
-		cardObjects = {}
-		selectedSet = {}
-		items = newItems or {}
-		for i, item in ipairs(items) do
-			buildCard(i, item)
-		end
-	end
-
-	buildAll(items)
-
-	-- ── Public API ────────────────────────────────────────────
-	local function GetSelected()
-		local sel = {}
-		for i in pairs(selectedSet) do table.insert(sel, i) end
-		table.sort(sel)
-		return sel
-	end
-
-	local function SetSelected(indices)
-		selectedSet = {}
-		for _, i in ipairs(indices) do
-			if cardObjects[i] then selectedSet[i] = true end
-		end
-		for _, obj in pairs(cardObjects) do refreshCard(obj) end
-	end
-
-	local function ClearSelected()
-		selectedSet = {}
-		for _, obj in pairs(cardObjects) do refreshCard(obj) end
-	end
-
-	local function SetItems(newItems)
-		buildAll(newItems)
-	end
-
-	return {
-		Frame        = Wrapper,
-		GetSelected  = GetSelected,
-		SetSelected  = SetSelected,
-		ClearSelected = ClearSelected,
-		SetItems     = SetItems,
-	}
-end
-
--- ============================================================
 -- CreateLabel
 -- A lightweight single-line text row — for captions, hints and
 -- section lead-ins that don't need a full Paragraph card.
@@ -5317,7 +5010,6 @@ UILib.hstack      = UILib.CreateHStack
 UILib.image       = UILib.CreateImage
 UILib.input       = UILib.CreateTextInput
 UILib.keybind     = UILib.CreateKeybind
-UILib.cardlist    = UILib.CreateCardList
 UILib.paragraph   = UILib.CreateParagraph
 UILib.progressbar = UILib.CreateProgressBar
 UILib.section     = UILib.CreateSection
