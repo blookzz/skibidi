@@ -1607,6 +1607,10 @@ end
 --                          "left" renders a vertical tab rail instead
 --                          of the horizontal bar under the header
 --   TabWidth     number    Rail width when TabSide="left" (default 96)
+--   TabHeight    number    Height of each button on the side rail
+--                          when TabSide="left"         (default 28)
+--   TabGap       number    Vertical space between side rail buttons
+--                          when TabSide="left"         (default 4)
 --   SubTitle     string    Small muted text after the title (optional)
 --   Variant      string    "gold"|"blue"|"green"|"red" (optional)
 --   Minimized    bool      Start minimized             (default false)
@@ -2158,7 +2162,12 @@ function UILib.CreatePanel(Options)
 	local tabIcons = {}   -- index -> ImageLabel (only tabs that have one)
 	local TAB_ICON = 14
 	local tabGap, tabW = 6, 0
-	local SIDE_TAB_H, SIDE_TAB_GAP, SIDE_TAB_TOP = 28, 4, 8
+	-- Rail button height and gap are per-panel options; the indicator
+	-- position below is derived from the same numbers, so the accent bar
+	-- stays centred on whichever tab is active at any size.
+	local SIDE_TAB_H   = tonumber(Options.TabHeight) or 28
+	local SIDE_TAB_GAP = tonumber(Options.TabGap) or 4
+	local SIDE_TAB_TOP = 8
 	if hasTabs and not sideTabs then
 		TabBar = Instance.new("Frame")
 		TabBar.Position               = UDim2.new(0, 0, 0, HEADER_H)
@@ -2238,8 +2247,8 @@ function UILib.CreatePanel(Options)
 		TabBar.BorderSizePixel        = 0
 		TabBar.ZIndex                 = 2
 		TabBar.Parent                 = Frame
-		MakePadding(TabBar, 6, 6, 8, 8)
-		MakeListLayout(TabBar, Enum.FillDirection.Vertical, 4)
+		MakePadding(TabBar, 6, 6, SIDE_TAB_TOP, SIDE_TAB_TOP)
+		MakeListLayout(TabBar, Enum.FillDirection.Vertical, SIDE_TAB_GAP)
 
 		-- Vertical divider between the rail and the content area
 		-- (kept in TabUnderline so minimize/restore hides it too)
@@ -2255,7 +2264,7 @@ function UILib.CreatePanel(Options)
 		TabBtns = {}
 		for i, name in ipairs(Tabs) do
 			local btn = Instance.new("TextButton")
-			btn.Size              = UDim2.new(1, 0, 0, 28)
+			btn.Size              = UDim2.new(1, 0, 0, SIDE_TAB_H)
 			btn.LayoutOrder       = i
 			btn.BackgroundColor3  = Theme.Bg2
 			btn.BorderSizePixel   = 0
@@ -2280,7 +2289,8 @@ function UILib.CreatePanel(Options)
 
 		TabInd = Instance.new("Frame")
 		TabInd.Size             = UDim2.new(0, 3, 0, 16)
-		TabInd.Position         = UDim2.new(0, 2, 0, HEADER_H + SIDE_TAB_TOP + 6)
+		TabInd.Position         = UDim2.new(0, 2, 0,
+			HEADER_H + SIDE_TAB_TOP + math.floor((SIDE_TAB_H - 16) / 2))
 		TabInd.BackgroundColor3 = Accent
 		TabInd.BorderSizePixel  = 0
 		TabInd.ZIndex           = 4
