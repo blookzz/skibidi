@@ -1544,7 +1544,7 @@ function UILib.CreatePanel(Options)
 		MakeRipple(DiscordBtn, Theme.AccentSec, 7)
 
 		local DiscordIcon = Instance.new("ImageLabel")
-		DiscordIcon.Size                   = UDim2.new(0, 14, 0, 14)
+		DiscordIcon.Size                   = UDim2.new(0, 16, 0, 16)
 		DiscordIcon.AnchorPoint            = Vector2.new(0.5, 0.5)
 		DiscordIcon.Position               = UDim2.new(0.5, 0, 0.5, 0)
 		DiscordIcon.BackgroundTransparency = 1
