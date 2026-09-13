@@ -1522,7 +1522,7 @@ function UILib.CreatePanel(Options)
 	-- executor workspace (see FetchCachedImage). DISCORD_ICON_ID is only
 	-- the fallback shown while the download runs or when the executor has
 	-- no writefile/getcustomasset.
-	local DISCORD_ICON_URL  = "https://files.catbox.moe/vfjexk.png"
+	local DISCORD_ICON_URL  = "https://files.catbox.moe/gvgnul.png"
 	local DISCORD_ICON_FILE = "UILib_discord.png"
 	local DISCORD_ICON_ID   = "rbxassetid://94434236999817"
 
