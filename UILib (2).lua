@@ -1062,6 +1062,48 @@ end
 local DefaultParent = PlayerGui
 
 -- ============================================================
+-- FetchCachedImage(url, fileName) → asset string | nil
+-- Downloads a web image once, caches it in the executor workspace
+-- via writefile, and returns a getcustomasset path for it. Later
+-- runs skip the download and read the cached file. Returns nil
+-- (never throws) when the executor lacks file/asset APIs or the
+-- request fails, so callers can keep a rbxassetid fallback.
+-- ============================================================
+local function FetchCachedImage(url, fileName)
+	if type(getcustomasset) ~= "function" then return nil end
+
+	local cached = type(isfile) == "function" and isfile(fileName)
+	if not cached then
+		if type(writefile) ~= "function" then return nil end
+
+		local body
+		local req = (type(request) == "function" and request)
+			or (type(http_request) == "function" and http_request)
+			or (type(syn) == "table" and type(syn.request) == "function" and syn.request)
+		if req then
+			local ok, res = pcall(req, { Url = url, Method = "GET" })
+			if ok and type(res) == "table" and res.Success ~= false and type(res.Body) == "string" then
+				body = res.Body
+			end
+		end
+		if not body then
+			local ok, res = pcall(game.HttpGet, game, url)
+			if ok and type(res) == "string" then body = res end
+		end
+		if not body or #body == 0 then return nil end
+
+		local okWrite = pcall(writefile, fileName, body)
+		if not okWrite then return nil end
+	end
+
+	local okAsset, asset = pcall(getcustomasset, fileName)
+	if okAsset and type(asset) == "string" and #asset > 0 then
+		return asset
+	end
+	return nil
+end
+
+-- ============================================================
 -- CreatePanel
 -- Creates a draggable panel with optional tab bar.
 --
@@ -1475,8 +1517,14 @@ function UILib.CreatePanel(Options)
 	-- Discord button (optional, off by default)
 	-- Options.Discord = true enables it. Clicking copies the invite link
 	-- to the clipboard via setclipboard (when the executor supports it).
-	local DISCORD_INVITE  = "https://discord.gg/vonhub"
-	local DISCORD_ICON_ID = "rbxassetid://94434236999817" -- simple Discord mark; swap if it doesn't render for you
+	local DISCORD_INVITE    = "https://discord.gg/vonhub"
+	-- The Discord mark is fetched from the web and cached as a PNG in the
+	-- executor workspace (see FetchCachedImage). DISCORD_ICON_ID is only
+	-- the fallback shown while the download runs or when the executor has
+	-- no writefile/getcustomasset.
+	local DISCORD_ICON_URL  = "https://files.catbox.moe/vfjexk.png"
+	local DISCORD_ICON_FILE = "UILib_discord.png"
+	local DISCORD_ICON_ID   = "rbxassetid://94434236999817"
 
 	local DiscordBtn
 	if showDiscord then
@@ -1502,8 +1550,18 @@ function UILib.CreatePanel(Options)
 		DiscordIcon.BackgroundTransparency = 1
 		DiscordIcon.Image                  = DISCORD_ICON_ID
 		DiscordIcon.ImageColor3            = Theme.AccentSec
+		DiscordIcon.ScaleType              = Enum.ScaleType.Fit
 		DiscordIcon.ZIndex                 = 5
 		DiscordIcon.Parent                 = DiscordBtn
+
+		-- Swap in the cached PNG once it's available (first run downloads
+		-- it, later runs read it straight from the workspace file).
+		task.spawn(function()
+			local asset = FetchCachedImage(DISCORD_ICON_URL, DISCORD_ICON_FILE)
+			if asset and DiscordIcon.Parent then
+				DiscordIcon.Image = asset
+			end
+		end)
 
 		DiscordBtn.MouseButton1Click:Connect(function()
 			if setclipboard then
