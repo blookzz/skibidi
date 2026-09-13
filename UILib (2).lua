@@ -1083,6 +1083,21 @@ local DefaultParent = PlayerGui
 --                          dragging                    (default false)
 --   ToggleKey    Enum.KeyCode | string   Hotkey that shows/hides the
 --                          whole panel (optional)
+--   Discord      bool      Discord chip in the header; click copies
+--                          the invite link             (default false)
+--   Search       bool      Search chip in the header (lucide "search"
+--                          icon). Opens a search box in place of the
+--                          title that live-filters the panel's rows
+--                          by their text, across every tab
+--                                                      (default true)
+--   Scaler       bool      Resize grip in the bottom-right corner;
+--                          drag it to resize the panel (default false)
+--   MinSize      Vector2 | {w, h}   Smallest size the grip allows
+--                          (default half the panel's initial size)
+--   MaxSize      Vector2 | {w, h}   Largest size the grip allows
+--                          (default double the panel's initial size)
+--   MinWidth / MinHeight / MaxWidth / MaxHeight   number
+--                          Per-axis overrides of the two above
 --
 -- Returns:
 --   {
@@ -1095,6 +1110,9 @@ local DefaultParent = PlayerGui
 --     GetTabButton(index), SetTitle(text),
 --     SetVisible(bool), ToggleVisible(), IsVisible(),
 --     SetMinimized(bool), IsMinimized(), Close(),
+--     SetSearchOpen(bool), IsSearchOpen(), SetSearch(text),
+--     SetSize(w, h), GetSize(),
+--     SearchBtn, ScaleBtn (nil when the option is off)
 --   }
 -- ============================================================
 function UILib.CreatePanel(Options)
@@ -1254,7 +1272,10 @@ function UILib.CreatePanel(Options)
 	end
 
 	local showDiscord = Options.Discord == true
-	local reservedRight = 86 + (showDiscord and 34 or 0)
+	local showSearch  = Options.Search ~= false   -- on unless explicitly disabled
+	local showScaler  = Options.Scaler == true
+	-- Close + minimize chips, then one 28px chip + 6px gap per optional chip.
+	local reservedRight = 86 + (showDiscord and 34 or 0) + (showSearch and 34 or 0)
 
 	-- Small accent pip left of the title — a window "app icon" stand-in
 	-- that also gives the header a fixed optical left margin.
@@ -1436,16 +1457,25 @@ function UILib.CreatePanel(Options)
 		return B
 	end
 
+	-- Chips are laid out right-to-left: each one claims a 28px slot plus
+	-- a 6px gap, so optional chips can be added without hand-tuning offsets.
+	local chipX = -8
+	local function nextChipX()
+		local x = chipX
+		chipX = chipX - (28 + 6)
+		return x
+	end
+
 	-- Close button
-	local CloseBtn = MakeHeaderChip("×", -8)
+	local CloseBtn = MakeHeaderChip("×", nextChipX())
 
 	-- Minimize button (shifted left to make room for the close button)
-	local MinBtn = MakeHeaderChip("–", -8 - 28 - 6)
+	local MinBtn = MakeHeaderChip("–", nextChipX())
 
 	-- Discord button (optional, off by default)
 	-- Options.Discord = true enables it. Clicking copies the invite link
 	-- to the clipboard via setclipboard (when the executor supports it).
-	local DISCORD_INVITE  = "https://discord.gg/rNvAU6cjVB"
+	local DISCORD_INVITE  = "https://discord.gg/vonhub"
 	local DISCORD_ICON_ID = "rbxassetid://94434236999817" -- simple Discord mark; swap if it doesn't render for you
 
 	local DiscordBtn
@@ -1453,7 +1483,7 @@ function UILib.CreatePanel(Options)
 		DiscordBtn = Instance.new("TextButton")
 		DiscordBtn.Size                   = UDim2.new(0, 28, 0, 20)
 		DiscordBtn.AnchorPoint            = Vector2.new(1, 0.5)
-		DiscordBtn.Position               = UDim2.new(1, -8 - 28 - 6 - 28 - 6, 0.5, 0)
+		DiscordBtn.Position               = UDim2.new(1, nextChipX(), 0.5, 0)
 		DiscordBtn.BackgroundColor3       = AccentDim
 		DiscordBtn.BorderSizePixel        = 0
 		DiscordBtn.Text                   = ""
@@ -1492,6 +1522,53 @@ function UILib.CreatePanel(Options)
 		DiscordBtn.MouseLeave:Connect(function()
 			TweenService:Create(DiscordBtn, TweenFast, { BackgroundColor3 = AccentDim }):Play()
 		end)
+	end
+
+	-- Search button (optional, on by default)
+	-- Options.Search = false disables it. Clicking swaps the title for a
+	-- search box; typing live-filters every tab's rows by their text.
+	-- The glyph is lucide's "search" from the icon set WindUI ships with.
+	local SEARCH_ICON_ID = "rbxassetid://121018724060431"
+	local SearchBtn, SearchIcon, SearchBox
+	if showSearch then
+		SearchBtn = MakeHeaderChip("", nextChipX())
+		SearchBtn.Name = "Search"
+
+		SearchIcon = Instance.new("ImageLabel")
+		SearchIcon.Size                   = UDim2.new(0, 13, 0, 13)
+		SearchIcon.AnchorPoint            = Vector2.new(0.5, 0.5)
+		SearchIcon.Position               = UDim2.new(0.5, 0, 0.5, 0)
+		SearchIcon.BackgroundTransparency = 1
+		SearchIcon.Image                  = SEARCH_ICON_ID
+		SearchIcon.ImageColor3            = Theme.AccentSec
+		SearchIcon.ZIndex                 = 5
+		SearchIcon.Parent                 = SearchBtn
+
+		-- The box takes over the title's slot so nothing else in the
+		-- header has to move; it is only visible while search is open.
+		SearchBox = Instance.new("TextBox")
+		SearchBox.Name                   = "SearchBox"
+		SearchBox.Size                   = UDim2.new(1, -(reservedRight + TITLE_X), 0, 22)
+		SearchBox.AnchorPoint            = Vector2.new(0, 0.5)
+		SearchBox.Position               = UDim2.new(0, TITLE_X, 0.5, 0)
+		SearchBox.BackgroundColor3       = Theme.InputBg
+		SearchBox.BackgroundTransparency = 0.10
+		SearchBox.BorderSizePixel        = 0
+		SearchBox.Font                   = Theme.FontMedium
+		SearchBox.TextSize               = Theme.SmallSize
+		SearchBox.TextColor3             = Theme.TextPrimary
+		SearchBox.PlaceholderText        = "Search…"
+		SearchBox.PlaceholderColor3      = Theme.TextMuted
+		SearchBox.TextXAlignment         = Enum.TextXAlignment.Left
+		SearchBox.TextTruncate           = Enum.TextTruncate.AtEnd
+		SearchBox.ClearTextOnFocus       = false
+		SearchBox.Text                   = ""
+		SearchBox.Visible                = false
+		SearchBox.ZIndex                 = 4
+		SearchBox.Parent                 = Header
+		MakeCorner(SearchBox, UDim.new(0, 7))
+		MakeEdge(SearchBox, Accent, 1, 0.55)
+		MakePadding(SearchBox, 8, 8, 0, 0)
 	end
 
 	-- ── Tab bar (optional) ─────────────────────────────────
@@ -1767,6 +1844,7 @@ function UILib.CreatePanel(Options)
 	local MIN_BTN_W     = 28   -- MinBtn.Size.X
 	local CLOSE_BTN_W   = 28   -- CloseBtn.Size.X
 	local DISCORD_BTN_W = showDiscord and (28 + 6) or 0  -- DiscordBtn.Size.X + gap, if present
+	local SEARCH_BTN_W  = showSearch  and (28 + 6) or 0  -- SearchBtn.Size.X + gap, if present
 	local BTN_GAP       = 6    -- gap between MinBtn and CloseBtn
 	local MIN_BTN_RIGHT = 8    -- CloseBtn's right margin (see Position above)
 	local TITLE_GAP     = 10   -- breathing room between title text and buttons
@@ -1789,7 +1867,7 @@ function UILib.CreatePanel(Options)
 			w = w + SUB_GAP + SUB_PADX
 			   + measureText(plainSubTitle, Theme.CaptionSize, Theme.FontMedium)
 		end
-		w = w + TITLE_GAP + DISCORD_BTN_W + MIN_BTN_W + BTN_GAP + CLOSE_BTN_W + MIN_BTN_RIGHT
+		w = w + TITLE_GAP + SEARCH_BTN_W + DISCORD_BTN_W + MIN_BTN_W + BTN_GAP + CLOSE_BTN_W + MIN_BTN_RIGHT
 		-- Clamp to the panel's own width so minimizing never makes the
 		-- window *wider*; a title long enough to hit that ceiling simply
 		-- truncates instead.
@@ -1799,10 +1877,16 @@ function UILib.CreatePanel(Options)
 	local isMinimized = Options.Minimized == true
 	local minimizeToken = 0
 
+	-- Defined further down (search / resize sections); declared here so
+	-- the minimize logic can reach them.
+	local ScaleBtn
+	local SetSearchOpen = function() end
+
 	local function setBodyVisible(visible)
 		if TabBar       then TabBar.Visible       = visible end
 		if TabUnderline then TabUnderline.Visible = visible end
 		if TabInd       then TabInd.Visible       = visible end
+		if ScaleBtn     then ScaleBtn.Visible     = visible end
 		if visible then
 			for i, sf in ipairs(tabFrames) do
 				if hasTabs then
@@ -1866,6 +1950,8 @@ function UILib.CreatePanel(Options)
 	local function SetMinimized(minimized)
 		if isMinimized == minimized then return end
 		isMinimized = minimized
+		-- A search box has nowhere to live in a collapsed header.
+		if minimized then SetSearchOpen(false) end
 		applyMinimize(false)
 	end
 
@@ -1878,6 +1964,220 @@ function UILib.CreatePanel(Options)
 	MinBtn.MouseLeave:Connect(function()
 		TweenService:Create(MinBtn, TweenFast, { BackgroundColor3 = AccentDim }):Play()
 	end)
+
+	-- ── Search ─────────────────────────────────────────────
+	-- Rows are the direct children of each tab's scrolling frame. A row
+	-- matches when any text inside it (its own label, a section title, a
+	-- toggle's caption…) contains the query, case-insensitively. Rows the
+	-- search hides are remembered so clearing it restores exactly those
+	-- and never un-hides something the caller hid on purpose.
+	local searchOpen   = false
+	local searchHidden = {}   -- row -> true while hidden by the search
+
+	local function rowMatches(row, q)
+		local objs = row:GetDescendants()
+		table.insert(objs, row)
+		for _, d in ipairs(objs) do
+			if (d:IsA("TextLabel") or d:IsA("TextButton")) and d.Text ~= "" then
+				-- RichText labels carry markup; strip it so "<font" can't match.
+				local plain = string.lower((string.gsub(d.Text, "<[^>]->", "")))
+				if string.find(plain, q, 1, true) then return true end
+			end
+		end
+		return false
+	end
+
+	local function applySearch(query)
+		local q = string.lower(query or "")
+		local hits = {}
+		for i, sf in ipairs(tabFrames) do
+			local n = 0
+			for _, row in ipairs(sf:GetChildren()) do
+				if row:IsA("GuiObject") then
+					if q == "" or rowMatches(row, q) then
+						if searchHidden[row] then
+							row.Visible = true
+							searchHidden[row] = nil
+						end
+						if row.Visible then n = n + 1 end
+					elseif row.Visible then
+						row.Visible = false
+						searchHidden[row] = true
+					end
+				end
+			end
+			hits[i] = n
+		end
+		-- Nothing on the current tab but hits elsewhere: jump to the first
+		-- tab that has some, so a search never looks like it found nothing.
+		if q ~= "" and hasTabs and hits[activeTab] == 0 then
+			for i, n in ipairs(hits) do
+				if n > 0 then SetTab(i) break end
+			end
+		end
+	end
+
+	SetSearchOpen = function(open)
+		if not SearchBtn then return end
+		open = open == true
+		if open == searchOpen then return end
+		if open and isMinimized then SetMinimized(false) end
+		searchOpen = open
+
+		TitleLabel.Visible = not open
+		if SubPill then SubPill.Visible = (not open) and plainSubTitle ~= "" end
+		SearchBox.Visible = open
+		SearchBox.Text    = ""
+		TweenService:Create(SearchIcon, TweenFast,
+			{ ImageColor3 = open and Theme.Accent or Theme.AccentSec }):Play()
+		TweenService:Create(SearchBtn, TweenFast,
+			{ BackgroundColor3 = open and Theme.ToggleOn or AccentDim }):Play()
+
+		if open then
+			-- Deferred: focusing in the same frame the box becomes visible
+			-- is dropped by the engine.
+			task.defer(function()
+				if SearchBox.Parent and searchOpen then SearchBox:CaptureFocus() end
+			end)
+		else
+			SearchBox:ReleaseFocus()
+			applySearch("")
+		end
+	end
+
+	if SearchBtn then
+		SearchBtn.MouseButton1Click:Connect(function()
+			SetSearchOpen(not searchOpen)
+		end)
+		SearchBtn.MouseEnter:Connect(function()
+			TweenService:Create(SearchBtn, TweenFast, { BackgroundColor3 = Theme.ToggleOn }):Play()
+		end)
+		SearchBtn.MouseLeave:Connect(function()
+			if searchOpen then return end
+			TweenService:Create(SearchBtn, TweenFast, { BackgroundColor3 = AccentDim }):Play()
+		end)
+		SearchBox:GetPropertyChangedSignal("Text"):Connect(function()
+			if searchOpen then applySearch(SearchBox.Text) end
+		end)
+		-- Escape closes and clears. Enter or clicking away keeps the
+		-- filter in place so the user can interact with what they found.
+		SearchBox.FocusLost:Connect(function(enterPressed, inp)
+			if typeof(inp) == "Instance" and inp:IsA("InputObject")
+			and inp.KeyCode == Enum.KeyCode.Escape then
+				SetSearchOpen(false)
+			end
+		end)
+	end
+
+	-- ── Resize grip (optional, off by default) ─────────────
+	-- Options.Scaler = true adds a small grip in the bottom-right corner.
+	-- Dragging it resizes the panel between MinSize and MaxSize (each axis
+	-- clamped on its own; defaults are half and double the initial size).
+	-- Width / FULL_H are rebound on every change, so minimize/restore and
+	-- the title layout keep working at the new size.
+	local SCALE_ICON_ID = "rbxassetid://122360365318466"   -- lucide "scaling"
+
+	local function sizePair(v)
+		if typeof(v) == "Vector2" then return v.X, v.Y end
+		if typeof(v) == "UDim2"   then return v.X.Offset, v.Y.Offset end
+		if type(v) == "table" then
+			return v[1] or v.X or v.Width or v.w, v[2] or v.Y or v.Height or v.h
+		end
+		return nil, nil
+	end
+	local minSizeW, minSizeH = sizePair(Options.MinSize)
+	local maxSizeW, maxSizeH = sizePair(Options.MaxSize)
+	local MIN_W = Options.MinWidth  or minSizeW or math.floor(Width  / 2)
+	local MIN_H = Options.MinHeight or minSizeH or math.floor(FULL_H / 2)
+	local MAX_W = Options.MaxWidth  or maxSizeW or Width  * 2
+	local MAX_H = Options.MaxHeight or maxSizeH or FULL_H * 2
+	-- The body can never collapse past the header and tab bar.
+	MIN_H = math.max(MIN_H, HEADER_H + TABBAR_H + 24)
+	MIN_W = math.max(MIN_W, 90)
+	MAX_W = math.max(MAX_W, MIN_W)
+	MAX_H = math.max(MAX_H, MIN_H)
+
+	-- Re-derives everything that was sized from Width at build time.
+	local function relayoutForSize()
+		layoutTitle()
+		if hasTabs and not sideTabs and TabBtns then
+			tabW = (Width - 20 - tabGap * (#Tabs - 1)) / #Tabs
+			for _, btn in ipairs(TabBtns) do
+				btn.Size = UDim2.new(0, tabW, 1, 0)
+			end
+			if TabInd then
+				TabInd.Size     = UDim2.new(0, math.floor(tabW), 0, 2)
+				TabInd.Position = tabIndicatorTarget(activeTab)
+			end
+		end
+	end
+
+	local function SetSize(w, h)
+		w = math.floor(tonumber(w) or Width)
+		h = math.floor(tonumber(h) or FULL_H)
+		if showScaler then
+			w = math.clamp(w, MIN_W, MAX_W)
+			h = math.clamp(h, MIN_H, MAX_H)
+		end
+		Width  = w
+		FULL_H = h
+		if not isMinimized then
+			Frame.Size = UDim2.new(0, Width, 0, FULL_H)
+		end
+		relayoutForSize()
+	end
+
+	if showScaler then
+		ScaleBtn = Instance.new("ImageButton")
+		ScaleBtn.Name                   = "ResizeGrip"
+		ScaleBtn.Size                   = UDim2.new(0, 16, 0, 16)
+		ScaleBtn.AnchorPoint            = Vector2.new(1, 1)
+		ScaleBtn.Position               = UDim2.new(1, -5, 1, -5)
+		ScaleBtn.BackgroundTransparency = 1
+		ScaleBtn.Image                  = SCALE_ICON_ID
+		ScaleBtn.ImageColor3            = Theme.TextMuted
+		ScaleBtn.ImageTransparency      = 0.25
+		ScaleBtn.AutoButtonColor        = false
+		ScaleBtn.ZIndex                 = 8
+		ScaleBtn.Visible                = not isMinimized
+		ScaleBtn.Parent                 = Frame
+
+		local resizing, resizeStart, startW, startH = false, nil, 0, 0
+		local function restGrip()
+			if resizing then return end
+			TweenService:Create(ScaleBtn, TweenFast,
+				{ ImageColor3 = Theme.TextMuted, ImageTransparency = 0.25 }):Play()
+		end
+		ScaleBtn.MouseEnter:Connect(function()
+			TweenService:Create(ScaleBtn, TweenFast,
+				{ ImageColor3 = Accent, ImageTransparency = 0 }):Play()
+		end)
+		ScaleBtn.MouseLeave:Connect(restGrip)
+		ScaleBtn.InputBegan:Connect(function(inp)
+			if inp.UserInputType ~= Enum.UserInputType.MouseButton1
+			and inp.UserInputType ~= Enum.UserInputType.Touch then return end
+			if isMinimized then return end
+			resizing    = true
+			resizeStart = inp.Position
+			startW, startH = Width, FULL_H
+			TweenService:Create(ScaleBtn, TweenFast,
+				{ ImageColor3 = Accent, ImageTransparency = 0 }):Play()
+		end)
+		ConnectScoped(Gui, UserInputService.InputEnded, function(inp)
+			if not resizing then return end
+			if inp.UserInputType ~= Enum.UserInputType.MouseButton1
+			and inp.UserInputType ~= Enum.UserInputType.Touch then return end
+			resizing = false
+			restGrip()
+		end)
+		ConnectScoped(Gui, UserInputService.InputChanged, function(inp)
+			if not resizing then return end
+			if inp.UserInputType ~= Enum.UserInputType.MouseMovement
+			and inp.UserInputType ~= Enum.UserInputType.Touch then return end
+			local d = inp.Position - resizeStart
+			SetSize(startW + d.X, startH + d.Y)
+		end)
+	end
 
 	local function CloseWindow()
 		if Gui then Gui:Destroy() end
@@ -1991,6 +2291,17 @@ function UILib.CreatePanel(Options)
 		CloseBtn     = CloseBtn,
 		Close        = CloseWindow,
 		DiscordBtn   = DiscordBtn,
+		SearchBtn    = SearchBtn,
+		SetSearchOpen = SetSearchOpen,
+		IsSearchOpen = function() return searchOpen end,
+		SetSearch    = function(text)
+			if not SearchBox then return end
+			SetSearchOpen(true)
+			SearchBox.Text = tostring(text or "")
+		end,
+		ScaleBtn     = ScaleBtn,
+		SetSize      = SetSize,
+		GetSize      = function() return Width, FULL_H end,
 		Accent       = Accent,
 		AccentDim    = AccentDim,
 	}
