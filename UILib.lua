@@ -1062,6 +1062,530 @@ end
 local DefaultParent = PlayerGui
 
 -- ============================================================
+-- FetchCachedImage(url, fileName) → asset string | nil
+-- Downloads a web image once, caches it in the executor workspace
+-- via writefile, and returns a getcustomasset path for it. Later
+-- runs skip the download and read the cached file. Returns nil
+-- (never throws) when the executor lacks file/asset APIs or the
+-- request fails, so callers can keep a rbxassetid fallback.
+-- ============================================================
+local function FetchCachedImage(url, fileName)
+	if type(getcustomasset) ~= "function" then return nil end
+
+	local cached = type(isfile) == "function" and isfile(fileName)
+	if not cached then
+		if type(writefile) ~= "function" then return nil end
+
+		local body
+		local req = (type(request) == "function" and request)
+			or (type(http_request) == "function" and http_request)
+			or (type(syn) == "table" and type(syn.request) == "function" and syn.request)
+		if req then
+			local ok, res = pcall(req, { Url = url, Method = "GET" })
+			if ok and type(res) == "table" and res.Success ~= false and type(res.Body) == "string" then
+				body = res.Body
+			end
+		end
+		if not body then
+			local ok, res = pcall(game.HttpGet, game, url)
+			if ok and type(res) == "string" then body = res end
+		end
+		if not body or #body == 0 then return nil end
+
+		local okWrite = pcall(writefile, fileName, body)
+		if not okWrite then return nil end
+	end
+
+	local okAsset, asset = pcall(getcustomasset, fileName)
+	if okAsset and type(asset) == "string" and #asset > 0 then
+		return asset
+	end
+	return nil
+end
+
+-- ============================================================
+-- ICONS
+-- Lucide glyphs, served from the same asset set WindUI ships with
+-- (github.com/Footagesus/Icons). Every component that takes an
+-- `Icon` option accepts any of:
+--   "house"                lucide name   (see lucide.dev/icons)
+--   "lucide:house"         WindUI-style pack prefix
+--   "rbxassetid://123"     raw asset id
+--   123                    numeric asset id
+-- A few hundred common names are embedded below so the usual icons
+-- need no HTTP request. Any other lucide name is fetched from the
+-- full ~1700-glyph map the first time it is asked for; the label is
+-- created immediately and fills in when the download lands.
+--
+-- Public API:
+--   UILib.ResolveIcon(spec)          -> asset id string | nil (sync)
+--   UILib.PreloadIcons([pack], [cb]) -> warm the full map up front
+--   UILib.AddIcons([pack], {name = id, ...})
+--   UILib.CreateIcon(parent, spec, size, color) -> { Label, Set(spec) }
+--   UILib.SetIcon(imageLabel, spec)
+-- ============================================================
+local ICON_PACK_URLS = {
+	lucide = "https://raw.githubusercontent.com/Footagesus/Icons/refs/heads/main/lucide/dist/Icons.lua",
+}
+local DEFAULT_ICON_PACK = "lucide"
+
+-- Asset ids are stored without the "rbxassetid://" prefix to keep the
+-- table compact; lookupIcon puts it back.
+local IconPacks = {
+	lucide = {
+		["house"] = "98755624629571", ["settings"] = "80758916183665", ["settings-2"] = "135684703553372",
+		["cog"] = "116544501716299", ["sliders-horizontal"] = "85538382643347",
+		["sliders-vertical"] = "101190569086853", ["user"] = "81589895647169", ["users"] = "115398113982385",
+		["user-round"] = "136485052187963", ["users-round"] = "103005444008339", ["user-plus"] = "118514469915884",
+		["user-minus"] = "126976941957511", ["user-check"] = "81775205032725", ["user-x"] = "139748155894754",
+		["search"] = "121018724060431", ["x"] = "110786993356448", ["check"] = "93898873302694",
+		["plus"] = "111774323017047", ["minus"] = "118026365011536", ["menu"] = "77021539815611",
+		["info"] = "124560466474914", ["circle-alert"] = "83898160590116", ["triangle-alert"] = "125920361880643",
+		["octagon-alert"] = "140438367956051", ["circle-check"] = "85262178816537",
+		["circle-check-big"] = "93202927221730", ["circle-x"] = "76821953846248",
+		["circle-plus"] = "113157136350384", ["circle-minus"] = "133556159576809",
+		["circle-slash"] = "125206439913049", ["ban"] = "90767043015246",
+		["circle-question-mark"] = "97516698664325", ["badge-check"] = "76078495178149",
+		["badge-alert"] = "101829200081951", ["badge-info"] = "131995373201472", ["bell"] = "97392696311902",
+		["bell-ring"] = "94612128913941", ["bell-off"] = "78560046118930", ["star"] = "136141469398409",
+		["heart"] = "116559368303288", ["heart-pulse"] = "129352925579546", ["zap"] = "130551565616516",
+		["zap-off"] = "81385483183652", ["eye"] = "100033680381365", ["eye-off"] = "135928786788378",
+		["eye-closed"] = "111063268625789", ["lock"] = "134724289526879", ["lock-open"] = "93597915325122",
+		["lock-keyhole"] = "78672912777756", ["key"] = "96510194465420", ["key-round"] = "83619031955390",
+		["shield"] = "110987169760162", ["shield-check"] = "87354736164608", ["shield-alert"] = "114995877719925",
+		["shield-off"] = "133426959132690", ["shield-ban"] = "108765041044649", ["sword"] = "124448418211665",
+		["swords"] = "81872698913435", ["crosshair"] = "134242818164054", ["target"] = "87563802520297",
+		["gamepad"] = "121607283959010", ["gamepad-2"] = "92483947987410", ["joystick"] = "99416790224739",
+		["play"] = "135609604299893", ["pause"] = "74873705394436", ["square"] = "86304921356806",
+		["skip-forward"] = "124844823753990", ["skip-back"] = "70466132711334",
+		["circle-play"] = "120408917249739", ["circle-pause"] = "139337739700879",
+		["circle-stop"] = "87400503942659", ["square-check"] = "134682053539509", ["square-x"] = "125136183850190",
+		["refresh-cw"] = "138133190015277", ["refresh-ccw"] = "117913330389477", ["rotate-cw"] = "84183336178654",
+		["rotate-ccw"] = "110116685948665", ["repeat"] = "121886242955173", ["shuffle"] = "132382786975101",
+		["rewind"] = "95205297521988", ["fast-forward"] = "121615540167909", ["download"] = "134814648082393",
+		["upload"] = "138212042425501", ["save"] = "126116963775616", ["folder"] = "80846616596607",
+		["folder-open"] = "76018996254888", ["file"] = "74748492079329", ["file-text"] = "90496405707281",
+		["file-code"] = "130978036895504", ["files"] = "102806336233202", ["code"] = "107380207681249",
+		["code-xml"] = "130150477351734", ["terminal"] = "106783148545356", ["cpu"] = "77549309870247",
+		["database"] = "126791525623846", ["server"] = "92188766517878", ["hard-drive"] = "88183305858463",
+		["globe"] = "114238209622913", ["earth"] = "76231597751076", ["wifi"] = "104669375183960",
+		["wifi-off"] = "74113634330106", ["link"] = "131607023382430", ["link-2"] = "86072351557466",
+		["unlink"] = "139835795227752", ["external-link"] = "129331830773832", ["copy"] = "78979572434545",
+		["clipboard"] = "89601995828423", ["clipboard-check"] = "92649798577170", ["scissors"] = "118665510911274",
+		["trash"] = "106723740584310", ["trash-2"] = "109843431391323", ["pencil"] = "137986121120732",
+		["pen"] = "72037878096321", ["pen-line"] = "109108135755303", ["eraser"] = "133957773112410",
+		["wrench"] = "112148279212860", ["hammer"] = "83545120140895", ["bug"] = "83626408925438",
+		["flask-conical"] = "128406680901165", ["beaker"] = "80902539995520", ["sparkles"] = "138635884129147",
+		["sparkle"] = "111044800239623", ["wand"] = "114580617777835", ["wand-sparkles"] = "82546429942392",
+		["flame"] = "98218034436456", ["snowflake"] = "101235206534566", ["sun"] = "110150589884127",
+		["moon"] = "83380517901735", ["cloud"] = "121226497050352", ["cloud-off"] = "131907154501444",
+		["cloud-download"] = "121435581993566", ["cloud-upload"] = "93307473217005", ["map"] = "95107167260947",
+		["map-pin"] = "84279202219901", ["map-pinned"] = "103963788475034", ["compass"] = "115123411028382",
+		["navigation"] = "79308213542922", ["locate"] = "84467676590391", ["locate-fixed"] = "137367361548433",
+		["move"] = "116138709011735", ["move-horizontal"] = "88513523439149", ["move-vertical"] = "86234730730899",
+		["arrow-up"] = "89282378235317", ["arrow-down"] = "98764963621439", ["arrow-left"] = "102531941843733",
+		["arrow-right"] = "113692007244654", ["arrow-up-right"] = "129280608535523",
+		["arrow-left-right"] = "131324733048447", ["arrow-up-down"] = "81019887641527",
+		["chevron-up"] = "122444883127455", ["chevron-down"] = "134243273101015",
+		["chevron-left"] = "73780377692148", ["chevron-right"] = "92473583511724",
+		["chevrons-up"] = "100467452364672", ["chevrons-down"] = "100524612205956",
+		["chevrons-left"] = "82617201744347", ["chevrons-right"] = "139121276490483", ["list"] = "113179976918783",
+		["list-checks"] = "99809353635593", ["layout-grid"] = "81344910161871",
+		["layout-dashboard"] = "139929981863901", ["layout-list"] = "87462136296578",
+		["layers"] = "81973586053257", ["box"] = "101768155599700", ["package"] = "97261141732706",
+		["gift"] = "109855212076373", ["coins"] = "116510979641930", ["dollar-sign"] = "127320961224019",
+		["wallet"] = "132331555762628", ["credit-card"] = "99163352872346", ["shopping-cart"] = "128420521375441",
+		["shopping-bag"] = "71885477293226", ["tag"] = "129104970103940", ["tags"] = "107179263080798",
+		["bookmark"] = "121093149326239", ["flag"] = "78183383236196", ["clock"] = "121808839832144",
+		["timer"] = "85473888890506", ["timer-reset"] = "110052125369932", ["hourglass"] = "86160434939203",
+		["calendar"] = "114792700814035", ["calendar-days"] = "99072017568595",
+		["alarm-clock"] = "126259032907535", ["watch"] = "130544621618405", ["activity"] = "94212016861936",
+		["chart-bar"] = "105389816384108", ["chart-line"] = "101833156055618", ["chart-pie"] = "113412261630136",
+		["trending-up"] = "81819858538839", ["trending-down"] = "139309232226438", ["gauge"] = "110273524101447",
+		["power"] = "96479131758775", ["power-off"] = "118768311012214", ["log-in"] = "103768533135201",
+		["log-out"] = "84895399304975", ["rocket"] = "87412317685854", ["ghost"] = "113822048130017",
+		["skull"] = "137726256442333", ["bot"] = "80451686744860", ["brain"] = "92424107303177",
+		["message-square"] = "83881670383280", ["message-circle"] = "127255077587058",
+		["messages-square"] = "97532166733358", ["send"] = "127751956873796", ["mail"] = "103945161245599",
+		["phone"] = "128804946640049", ["camera"] = "79950339943067", ["image"] = "112751259236831",
+		["images"] = "79350649395557", ["video"] = "107587444636945", ["film"] = "120978945609706",
+		["music"] = "113343203848535", ["volume"] = "103236289817396", ["volume-1"] = "98514588731639",
+		["volume-2"] = "89344380902620", ["volume-x"] = "139252359189540", ["mic"] = "89640799126523",
+		["mic-off"] = "82123034444822", ["monitor"] = "72664649203050", ["smartphone"] = "96623008834511",
+		["tv"] = "135687724791776", ["keyboard"] = "121474456068237", ["mouse"] = "73096068864710",
+		["mouse-pointer"] = "72322454962935", ["palette"] = "86350350950064", ["paintbrush"] = "125572663700289",
+		["brush"] = "127035535799640", ["droplet"] = "100597455015098", ["droplets"] = "140111846025180",
+		["pipette"] = "133167932934404", ["scaling"] = "122360365318466", ["maximize"] = "76045941763188",
+		["maximize-2"] = "73085922906397", ["minimize"] = "121304296213645", ["minimize-2"] = "116269596042539",
+		["expand"] = "137492887754537", ["shrink"] = "90953687918880", ["fullscreen"] = "77793665526178",
+		["funnel"] = "108829540827529", ["toggle-left"] = "85887872573050", ["toggle-right"] = "90411952142550",
+		["circle"] = "130359823580534", ["circle-dot"] = "82947033619201", ["dot"] = "137321056643916",
+		["grip"] = "109058783556768", ["grip-vertical"] = "137183678565296",
+		["grip-horizontal"] = "136255899715930", ["ellipsis"] = "140019550645825",
+		["ellipsis-vertical"] = "117978708573781", ["lightbulb"] = "103871245626488", ["book"] = "125383279695672",
+		["book-open"] = "129845326810392", ["scroll"] = "74072101474951", ["history"] = "123980022019922",
+		["undo"] = "111258459077271", ["redo"] = "116150342119054", ["undo-2"] = "113885292059932",
+		["redo-2"] = "70451039017914", ["car"] = "121065933462582", ["car-front"] = "87380942739063",
+		["plane"] = "126985561580989", ["footprints"] = "139192589041315", ["person-standing"] = "125020872044147",
+		["bike"] = "102930322246035", ["ship"] = "83995100553930", ["anchor"] = "92181172123618",
+		["trophy"] = "131545003268773", ["crown"] = "127843403295538", ["medal"] = "79016002264450",
+		["award"] = "132740088158419", ["gem"] = "112904952151156", ["diamond"] = "105846996304890",
+		["dice-5"] = "72768312430593", ["puzzle"] = "136837798892463", ["infinity"] = "98083086936965",
+		["percent"] = "130155041032013", ["hash"] = "82890331678520", ["at-sign"] = "79059152889146",
+		["type"] = "133543553793564", ["bold"] = "116141470019166", ["italic"] = "96220378864282",
+		["languages"] = "90816903776498", ["radio"] = "85611589536956", ["rss"] = "131789058984793",
+		["share"] = "87340985053299", ["share-2"] = "71210767962065", ["github"] = "120349554354380",
+		["youtube"] = "123663668456341", ["twitch"] = "71383308134888", ["twitter"] = "88791703276842",
+		["instagram"] = "119864798614855", ["facebook"] = "72098528632192", ["cat"] = "124252153404931",
+		["dog"] = "71920105558570", ["bird"] = "132284145117371", ["fish"] = "124360663785796",
+		["rabbit"] = "98580518804206", ["bone"] = "111242153474115", ["leaf"] = "119951075637174",
+		["trees"] = "121203841375919", ["tree-pine"] = "124662547202594", ["mountain"] = "73269957566415",
+		["waves"] = "96340135183647", ["wind"] = "114551690399915", ["umbrella"] = "127502210274589",
+		["thermometer"] = "106546011492311", ["battery"] = "70765800346189",
+		["battery-charging"] = "80139357470047", ["battery-low"] = "139659256984314", ["plug"] = "99782373064495",
+		["plug-zap"] = "74506269884055", ["bluetooth"] = "90506573139443", ["signal"] = "78424889355261",
+		["radar"] = "138528222906635", ["satellite"] = "134967053164645", ["scan"] = "123104789658180",
+		["qr-code"] = "105329945723350", ["fingerprint"] = "112173305232811", ["id-card"] = "75354294622640",
+		["contact"] = "75868297719012", ["handshake"] = "78442115255814", ["thumbs-up"] = "111137070767020",
+		["thumbs-down"] = "87794009914015", ["smile"] = "105880397565283", ["frown"] = "124407301067982",
+		["meh"] = "132197867028557", ["laugh"] = "104491311361166", ["angry"] = "74237056000103",
+		["party-popper"] = "111626795712193", ["cake"] = "103131590503275", ["pizza"] = "126964453193501",
+		["coffee"] = "106864403231093", ["beer"] = "116404978807744", ["utensils"] = "139952569804235",
+		["apple"] = "104349242902442", ["pill"] = "73280534813448", ["syringe"] = "123891270479254",
+		["bandage"] = "129660129590770", ["cross"] = "101833377863588", ["biohazard"] = "95956532900432",
+		["radiation"] = "104499586848433", ["bomb"] = "139223800924636", ["axe"] = "132405197863294",
+		["pickaxe"] = "105888023317688", ["shovel"] = "102465000512056", ["magnet"] = "135162361226972",
+		["highlighter"] = "77411555641113", ["ruler"] = "81432445547423", ["paint-bucket"] = "124275586663284",
+		["shapes"] = "129989433311409", ["triangle"] = "126330486745540", ["hexagon"] = "127592089339199",
+		["pentagon"] = "79184802179890", ["octagon"] = "120803515514852", ["component"] = "110027788875080",
+		["blocks"] = "72212693357737", ["door-open"] = "91306356501736", ["door-closed"] = "136249099949073",
+		["bed"] = "97726529032925", ["lamp"] = "110730830653382", ["speaker"] = "96227183003618",
+		["headphones"] = "118833729589183", ["clapperboard"] = "132660667070200", ["airplay"] = "115020759309179",
+		["cast"] = "98202245922071", ["printer"] = "76080649734247", ["usb"] = "117230058949613",
+		["binary"] = "91751953950088", ["braces"] = "117761094704041", ["brackets"] = "74368995728099",
+		["regex"] = "100727200791841", ["variable"] = "104743088438151", ["sigma"] = "126884244870899",
+		["pi"] = "74936036243146", ["calculator"] = "74915716529646", ["table"] = "109109148250737",
+		["kanban"] = "125934100055431", ["workflow"] = "99186544029189", ["git-branch"] = "90490195516649",
+		["git-merge"] = "131833355158059", ["git-pull-request"] = "138463010991471",
+		["network"] = "127410729922644", ["route"] = "89968303228953", ["waypoints"] = "102450133666017",
+		["milestone"] = "101618292325920", ["inbox"] = "112591360302868", ["archive"] = "122180020814574",
+		["truck"] = "86662707764771", ["bus"] = "133798469717463", ["fuel"] = "106447647274511",
+		["construction"] = "106539489968173", ["traffic-cone"] = "74110220470369", ["siren"] = "134210267818039",
+		["loader"] = "78408734580845", ["loader-circle"] = "116535712789945", ["wallet-cards"] = "129728715308337",
+		["gavel"] = "78952298198456", ["scale"] = "108203682317477", ["text-cursor"] = "115984654447300",
+		["text-cursor-input"] = "107551944047171", ["tally-5"] = "88031817475886",
+		["badge-percent"] = "121359224294885", ["sunrise"] = "134705665494098", ["sunset"] = "75904872203588",
+		["cloud-rain"] = "105547081967408", ["cloud-snow"] = "72307126270226",
+		["cloud-lightning"] = "133517088924849", ["cloud-sun"] = "86114208148727",
+		["cloud-moon"] = "71938114737914", ["zoom-in"] = "127956924984803", ["zoom-out"] = "108334162607319",
+		["focus"] = "87493973153317", ["aperture"] = "83396154449972", ["camera-off"] = "81057636835256",
+		["image-plus"] = "70391970623917", ["image-off"] = "81934811700938", ["file-plus"] = "78881710800060",
+		["file-minus"] = "111014798459222", ["file-check"] = "82604001452455", ["file-x"] = "107333775515154",
+		["file-search"] = "97780235974933", ["file-lock"] = "72170228691242", ["file-cog"] = "101385347151368",
+		["folder-plus"] = "91865663406119", ["folder-minus"] = "85648718999010",
+		["folder-lock"] = "119201572260567", ["folder-cog"] = "85299519462846", ["folder-tree"] = "85577554337861",
+		["folders"] = "110351216219061", ["import"] = "116545008906029", ["step-back"] = "108672750005121",
+		["step-forward"] = "126131872136145", ["disc"] = "101908120120777", ["podcast"] = "109577075549215",
+		["antenna"] = "99628923540956", ["square-plus"] = "114713264461873", ["square-minus"] = "116764432015770",
+		["square-play"] = "108186325238481", ["square-pause"] = "86608552787615",
+		["square-stop"] = "80018708472943", ["octagon-x"] = "90498161006311", ["check-check"] = "95183312173858",
+	},
+}
+-- Names lucide has renamed over the years (WindUI scripts still use the
+-- old ones), plus a few plain-English spellings.
+local ICON_ALIASES = {
+	["aimbot"] = "crosshair", ["alert"] = "circle-alert", ["alert-circle"] = "circle-alert",
+	["alert-octagon"] = "octagon-alert", ["alert-triangle"] = "triangle-alert",
+	["badge-help"] = "badge-question-mark", ["bar-chart"] = "chart-bar", ["bin"] = "trash-2",
+	["bulb"] = "lightbulb", ["check-circle"] = "circle-check", ["check-square"] = "square-check",
+	["circle-help"] = "circle-question-mark", ["close"] = "x", ["cogwheel"] = "settings", ["color"] = "palette",
+	["colour"] = "palette", ["combat"] = "swords", ["config"] = "save", ["configs"] = "save",
+	["credits"] = "info", ["crosshairs"] = "crosshair", ["discord"] = "message-circle",
+	["download-cloud"] = "cloud-download", ["edit"] = "pencil", ["edit-2"] = "pen", ["edit-3"] = "pen-line",
+	["enter"] = "log-in", ["error"] = "circle-x", ["esp"] = "eye", ["exit"] = "log-out", ["filter"] = "funnel",
+	["fire"] = "flame", ["fly"] = "plane", ["function-square"] = "square-function", ["gauge-circle"] = "gauge",
+	["gear"] = "settings", ["git-commit"] = "git-commit-horizontal", ["globe-2"] = "earth",
+	["grid"] = "grid-3x3", ["help"] = "circle-question-mark", ["help-circle"] = "circle-question-mark",
+	["home"] = "house", ["lightning"] = "zap", ["line-chart"] = "chart-line", ["loader-2"] = "loader-circle",
+	["location"] = "map-pin", ["magnifier"] = "search", ["minus-circle"] = "circle-minus",
+	["minus-square"] = "square-minus", ["misc"] = "layout-grid", ["more-horizontal"] = "ellipsis",
+	["more-vertical"] = "ellipsis-vertical", ["mute"] = "volume-x", ["paint"] = "palette",
+	["pause-circle"] = "circle-pause", ["people"] = "users", ["person"] = "user", ["photo"] = "image",
+	["picture"] = "image", ["pie-chart"] = "chart-pie", ["play-circle"] = "circle-play", ["player"] = "user",
+	["plus-circle"] = "circle-plus", ["plus-square"] = "square-plus", ["question"] = "circle-question-mark",
+	["refresh"] = "refresh-cw", ["reload"] = "rotate-cw", ["remove"] = "trash-2",
+	["shield-question"] = "shield-question-mark", ["sliders"] = "sliders-horizontal", ["sound"] = "volume-2",
+	["speed"] = "gauge", ["stop-circle"] = "circle-stop", ["success"] = "circle-check",
+	["teleport"] = "map-pinned", ["text"] = "type", ["tick"] = "check", ["tool"] = "wrench",
+	["unlock"] = "lock-open", ["upload-cloud"] = "cloud-upload", ["user-2"] = "user-round",
+	["users-2"] = "users-round", ["visuals"] = "eye", ["wand-2"] = "wand-sparkles",
+	["warning"] = "triangle-alert", ["world"] = "globe", ["x-circle"] = "circle-x", ["x-square"] = "square-x",
+}
+
+local iconPackState   = {}   -- pack -> "loading" | "loaded" | "failed"
+local iconPackWaiters = {}   -- pack -> { fn(ok), ... }
+local iconWarned      = {}   -- spec -> true once an "unknown icon" warning fired
+UILib.Icons = IconPacks
+
+local function httpGet(url)
+	local ok, res = pcall(function() return game:HttpGet(url) end)
+	if ok and type(res) == "string" and #res > 0 then return res end
+	ok, res = pcall(function() return HttpService:GetAsync(url) end)
+	if ok and type(res) == "string" and #res > 0 then return res end
+	return nil
+end
+
+local function isRawAsset(spec)
+	return type(spec) == "string"
+	   and (string.find(spec, "^rbxasset") or string.find(spec, "^http") or string.match(spec, "^%d+$")) ~= nil
+end
+
+local function parseIconSpec(spec)
+	local pack, name = string.match(spec, "^([%w_%-]+):(.+)$")
+	if pack and (ICON_PACK_URLS[pack] or IconPacks[pack]) then
+		return pack, name
+	end
+	return DEFAULT_ICON_PACK, spec
+end
+
+local function lookupIcon(pack, name)
+	local set = IconPacks[pack]
+	if not set then return nil end
+	name = string.lower(name)
+	local id = set[name] or (ICON_ALIASES[name] and set[ICON_ALIASES[name]])
+	if id == nil then return nil end
+	if type(id) == "number" then id = tostring(id) end
+	if not string.find(id, "://") then id = "rbxassetid://" .. id end
+	return id
+end
+
+-- Synchronous lookup. nil means "not known *yet*" for a lucide name that
+-- is outside the embedded subset and hasn't been downloaded.
+function UILib.ResolveIcon(spec)
+	if spec == nil or spec == "" then return nil end
+	if type(spec) == "number" then return "rbxassetid://" .. tostring(spec) end
+	if type(spec) ~= "string" then return nil end
+	if string.match(spec, "^%d+$") then return "rbxassetid://" .. spec end
+	if isRawAsset(spec) then return spec end
+	return lookupIcon(parseIconSpec(spec))
+end
+
+local function loadIconPack(pack, onDone)
+	local state = iconPackState[pack]
+	if state == "loaded" or state == "failed" then
+		if onDone then task.spawn(onDone, state == "loaded") end
+		return
+	end
+	if onDone then
+		iconPackWaiters[pack] = iconPackWaiters[pack] or {}
+		table.insert(iconPackWaiters[pack], onDone)
+	end
+	if state == "loading" then return end
+	iconPackState[pack] = "loading"
+	task.spawn(function()
+		local ok  = false
+		local url = ICON_PACK_URLS[pack]
+		local src = url and httpGet(url)
+		if src then
+			local okc, chunk = pcall(loadstring, src)
+			local okr, data  = false, nil
+			if okc and type(chunk) == "function" then okr, data = pcall(chunk) end
+			if okr and type(data) == "table" then
+				local set = IconPacks[pack] or {}
+				for k, v in pairs(data) do
+					if type(k) == "string" and set[k] == nil then
+						if type(v) == "number" then v = tostring(v) end
+						if type(v) == "table" and v.Image then v = v.Image end
+						if type(v) == "string" then set[k] = v end
+					end
+				end
+				IconPacks[pack] = set
+				ok = true
+			end
+		end
+		iconPackState[pack] = ok and "loaded" or "failed"
+		if not ok then
+			warn(("[UILib] icon pack %q could not be downloaded; only the embedded icons are available"):format(pack))
+		end
+		local waiters = iconPackWaiters[pack]
+		iconPackWaiters[pack] = nil
+		for _, fn in ipairs(waiters or {}) do task.spawn(fn, ok) end
+	end)
+end
+
+-- Downloads the full map now (e.g. at script start) so no icon ever
+-- shows up a beat late. `cb(ok)` is optional.
+function UILib.PreloadIcons(pack, cb)
+	if type(pack) == "function" then pack, cb = nil, pack end
+	loadIconPack(pack or DEFAULT_ICON_PACK, cb)
+end
+
+-- Register custom names, WindUI AddIcons style: { name = id, ... }.
+-- The id may be a number, "rbxassetid://…", or a WindUI spritesheet
+-- entry (only its Image is used).
+function UILib.AddIcons(pack, tbl)
+	if type(pack) == "table" and tbl == nil then pack, tbl = DEFAULT_ICON_PACK, pack end
+	if type(tbl) ~= "table" then return end
+	IconPacks[pack] = IconPacks[pack] or {}
+	for k, v in pairs(tbl) do
+		if type(v) == "number" then v = tostring(v) end
+		if type(v) == "table" and v.Image then v = v.Image end
+		if type(k) == "string" and type(v) == "string" then
+			IconPacks[pack][string.lower(k)] = v
+		end
+	end
+end
+
+-- Points an ImageLabel at an icon spec. Unknown lucide names trigger a
+-- download of the full map and the label is filled in once it lands
+-- (unless it was re-pointed somewhere else in the meantime).
+local function SetIconImage(label, spec)
+	if not label then return false end
+	local key = (spec ~= nil and spec ~= "") and tostring(spec) or nil
+	label:SetAttribute("IconSpec", key)
+	local id = UILib.ResolveIcon(spec)
+	if id then
+		label.Image = id
+		return true
+	end
+	label.Image = ""
+	if type(spec) ~= "string" or spec == "" then return false end
+	local pack = parseIconSpec(spec)
+	local function unknown()
+		if not iconWarned[spec] then
+			iconWarned[spec] = true
+			warn(("[UILib] unknown icon %q"):format(spec))
+		end
+	end
+	if iconPackState[pack] == "loaded" or iconPackState[pack] == "failed" then
+		if iconPackState[pack] == "loaded" then unknown() end
+		return false
+	end
+	loadIconPack(pack, function(ok)
+		if label:GetAttribute("IconSpec") ~= key then return end
+		local late = UILib.ResolveIcon(spec)
+		if late then
+			label.Image = late
+		elseif ok then
+			unknown()
+		end
+	end)
+	return false
+end
+UILib.SetIcon = SetIconImage
+
+local function MakeIcon(parent, spec, size, color, zindex)
+	local L = Instance.new("ImageLabel")
+	L.Name                   = "Icon"
+	L.Size                   = UDim2.new(0, size or 14, 0, size or 14)
+	L.BackgroundTransparency = 1
+	L.BorderSizePixel        = 0
+	L.ImageColor3            = color or Theme.TextPrimary
+	L.ScaleType              = Enum.ScaleType.Fit
+	L.ZIndex                 = zindex or (parent and parent.ZIndex) or 1
+	SetIconImage(L, spec)
+	L.Parent                 = parent
+	return L
+end
+
+-- Standalone icon for callers building their own layouts.
+function UILib.CreateIcon(Parent, spec, size, color)
+	if type(spec) == "table" then
+		local o = spec
+		spec, size, color = o.Icon, o.Size or size, o.Color or color
+	end
+	local L = MakeIcon(Parent, spec, size or 16, color)
+	return {
+		Frame = L,
+		Label = L,
+		Set   = function(sp) return SetIconImage(L, sp) end,
+	}
+end
+
+-- ── Layout helpers ─────────────────────────────────────────
+-- Three ways to put an icon next to text, depending on how the text
+-- is laid out. Each returns the ImageLabel.
+
+-- Left-aligned label positioned by offset inside a row: the icon takes
+-- the label's slot and the label slides right by (size + gap).
+local function PrefixIcon(Lbl, spec, size, color, gap)
+	size = size or 14
+	gap  = gap  or 6
+	local shift = size + gap
+	local L = MakeIcon(Lbl.Parent, spec, size, color or Lbl.TextColor3, Lbl.ZIndex)
+	local px, py, sy = Lbl.Position.X, Lbl.Position.Y, Lbl.Size.Y
+	L.AnchorPoint = Vector2.new(0, 0.5)
+	L.Position    = UDim2.new(px.Scale, px.Offset,
+	                          py.Scale + sy.Scale / 2, py.Offset + sy.Offset / 2)
+	Lbl.Position  = Lbl.Position + UDim2.new(0, shift, 0, 0)
+	Lbl.Size      = Lbl.Size     - UDim2.new(0, shift, 0, 0)
+	return L
+end
+
+-- Left-aligned text on an object that carries (or can carry) a
+-- UIPadding: the padding grows and the icon sits inside it.
+local function PadIcon(obj, spec, size, color, gap)
+	size = size or 14
+	gap  = gap  or 6
+	local pad = obj:FindFirstChildOfClass("UIPadding")
+	if not pad then
+		pad = Instance.new("UIPadding")
+		pad.Parent = obj
+	end
+	pad.PaddingLeft = UDim.new(pad.PaddingLeft.Scale, pad.PaddingLeft.Offset + size + gap)
+	local L = MakeIcon(obj, spec, size, color or obj.TextColor3, obj.ZIndex)
+	L.AnchorPoint = Vector2.new(0, 0.5)
+	L.Position    = UDim2.new(0, -(size + gap), 0.5, 0)
+	return L
+end
+
+-- Centred text (buttons, top tabs): the icon rides just left of the
+-- rendered text and the pair stays centred as a block. The text is
+-- measured again whenever Text/Font/TextSize change, so confirm-mode
+-- relabels and active-tab font swaps keep the icon glued to the text.
+local function InlineIcon(btn, spec, size, color, gap)
+	size = size or 14
+	gap  = gap  or 6
+	local block = size + gap
+	local pad = btn:FindFirstChildOfClass("UIPadding")
+	if not pad then
+		pad = Instance.new("UIPadding")
+		pad.Parent = btn
+	end
+	pad.PaddingLeft = UDim.new(pad.PaddingLeft.Scale, pad.PaddingLeft.Offset + block)
+	-- Full-size overlay layers (the ripple host) must keep covering the
+	-- whole control even though the padding just shrank the content box.
+	for _, c in ipairs(btn:GetChildren()) do
+		if c:IsA("GuiObject") and c.Size == UDim2.new(1, 0, 1, 0)
+		   and c.Position == UDim2.new(0, 0, 0, 0) then
+			c.Size     = UDim2.new(1, block, 1, 0)
+			c.Position = UDim2.new(0, -block, 0, 0)
+		end
+	end
+	local L = MakeIcon(btn, spec, size, color or btn.TextColor3, btn.ZIndex)
+	L.AnchorPoint = Vector2.new(0, 0.5)
+	local function relayout()
+		local t, w = btn.Text, 0
+		if t ~= "" then
+			local ok, b = pcall(TextService.GetTextSize, TextService,
+				t, btn.TextSize, btn.Font, Vector2.new(4000, 100))
+			w = (ok and b and b.X) or (#t * btn.TextSize * 0.55)
+		end
+		if w == 0 then
+			-- Icon alone: centre it in the *unpadded* box.
+			L.Position = UDim2.new(0.5, -(size + block) / 2, 0.5, 0)
+		else
+			L.Position = UDim2.new(0.5, -(w / 2 + block), 0.5, 0)
+		end
+	end
+	relayout()
+	for _, p in ipairs({ "Text", "Font", "TextSize" }) do
+		btn:GetPropertyChangedSignal(p):Connect(relayout)
+	end
+	return L
+end
+
+-- ============================================================
 -- CreatePanel
 -- Creates a draggable panel with optional tab bar.
 --
@@ -1070,7 +1594,14 @@ local DefaultParent = PlayerGui
 --   Title        string    Header title text           (default "")
 --   Width        number    Width in pixels             (default 310)
 --   Height       number    Content height in pixels    (default 300)
---   Tabs         table     Array of tab name strings   (optional — omit for no tabs)
+--   Icon         string    Lucide icon shown in place of the title pip
+--                          (optional, see ICONS above)
+--   Tabs         table     Array of tab names, or of tables
+--                          { Name = "Main", Icon = "house" }
+--                                                      (optional — omit for no tabs)
+--   TabIcons     table     Parallel list of icon specs for string
+--                          Tabs entries, e.g. { "house", "settings" }
+--                          (optional)
 --   DefaultTab   number    Initially active tab index  (default 1)
 --   TabSide      string    "top" | "left"              (default "top")
 --                          "left" renders a vertical tab rail instead
@@ -1083,6 +1614,21 @@ local DefaultParent = PlayerGui
 --                          dragging                    (default false)
 --   ToggleKey    Enum.KeyCode | string   Hotkey that shows/hides the
 --                          whole panel (optional)
+--   Discord      bool      Discord chip in the header; click copies
+--                          the invite link             (default false)
+--   Search       bool      Search chip in the header (lucide "search"
+--                          icon). Opens a search box in place of the
+--                          title that live-filters the panel's rows
+--                          by their text, across every tab
+--                                                      (default true)
+--   Scaler       bool      Resize grip in the bottom-right corner;
+--                          drag it to resize the panel (default false)
+--   MinSize      Vector2 | {w, h}   Smallest size the grip allows
+--                          (default half the panel's initial size)
+--   MaxSize      Vector2 | {w, h}   Largest size the grip allows
+--                          (default double the panel's initial size)
+--   MinWidth / MinHeight / MaxWidth / MaxHeight   number
+--                          Per-axis overrides of the two above
 --
 -- Returns:
 --   {
@@ -1092,16 +1638,37 @@ local DefaultParent = PlayerGui
 --     GetTab(index),     -- returns the Frame for tab[index]  (nil if no tabs)
 --     SetTab(index),     -- switches active tab
 --     GetActiveTab(),    -- returns current tab index
---     GetTabButton(index), SetTitle(text),
+--     GetTabButton(index), SetTitle(text), SetSubTitle(text),
+--     SetIcon(spec), SetTabIcon(index, spec), GetTabIcon(index),
 --     SetVisible(bool), ToggleVisible(), IsVisible(),
 --     SetMinimized(bool), IsMinimized(), Close(),
+--     SetSearchOpen(bool), IsSearchOpen(), SetSearch(text),
+--     SetSize(w, h), GetSize(),
+--     SearchBtn, ScaleBtn (nil when the option is off)
 --   }
 -- ============================================================
 function UILib.CreatePanel(Options)
 	Options = Options or {}
 
 	local Width      = Options.Width  or 310
-	local Tabs       = Options.Tabs   -- nil = no tab bar
+	-- Tab entries may be plain strings or { Name = "…", Icon = "…" }
+	-- tables; Options.TabIcons is an equivalent parallel list of icon
+	-- specs for callers who'd rather keep Tabs as strings.
+	local Tabs, tabIconSpecs = nil, {}   -- nil = no tab bar
+	if type(Options.Tabs) == "table" then
+		Tabs = {}
+		for i, t in ipairs(Options.Tabs) do
+			if type(t) == "table" then
+				Tabs[i] = tostring(t.Name or t.Title or t.Text or t[1] or "")
+				tabIconSpecs[i] = t.Icon or t[2]
+			else
+				Tabs[i] = tostring(t)
+			end
+			if type(Options.TabIcons) == "table" and Options.TabIcons[i] then
+				tabIconSpecs[i] = Options.TabIcons[i]
+			end
+		end
+	end
 	local hasTabs    = Tabs and #Tabs > 0
 	local activeTab  = Options.DefaultTab or 1
 
@@ -1254,7 +1821,10 @@ function UILib.CreatePanel(Options)
 	end
 
 	local showDiscord = Options.Discord == true
-	local reservedRight = 86 + (showDiscord and 34 or 0)
+	local showSearch  = Options.Search ~= false   -- on unless explicitly disabled
+	local showScaler  = Options.Scaler == true
+	-- Close + minimize chips, then one 28px chip + 6px gap per optional chip.
+	local reservedRight = 86 + (showDiscord and 34 or 0) + (showSearch and 34 or 0)
 
 	-- Small accent pip left of the title — a window "app icon" stand-in
 	-- that also gives the header a fixed optical left margin.
@@ -1268,7 +1838,21 @@ function UILib.CreatePanel(Options)
 	MakeCorner(TitlePip, UDim.new(1, 0))
 	MakeAccentFill(TitlePip, Accent)
 
-	local TITLE_X = 21   -- left edge of the title text (pip + gap)
+	-- Optional lucide icon (Options.Icon). It replaces the pip rather
+	-- than sitting beside it: the pip *is* the stand-in for an icon.
+	local TITLE_ICON   = 16
+	local TITLE_X_PIP  = 21                    -- pip + gap
+	local TITLE_X_ICON = 11 + TITLE_ICON + 7   -- icon + gap
+	local TitleIcon
+	if Options.Icon then
+		TitleIcon = MakeIcon(Header, Options.Icon, TITLE_ICON, Theme.AccentSec, 3)
+		TitleIcon.Name        = "TitleIcon"
+		TitleIcon.AnchorPoint = Vector2.new(0, 0.5)
+		TitleIcon.Position    = UDim2.new(0, 11, 0.5, 0)
+		TitlePip.Visible      = false
+	end
+
+	local TITLE_X = TitleIcon and TITLE_X_ICON or TITLE_X_PIP   -- left edge of the title text
 
 	-- Title and subtitle are separate labels rather than one RichText
 	-- string. Keeping them apart is what lets the minimize logic below
@@ -1436,24 +2020,39 @@ function UILib.CreatePanel(Options)
 		return B
 	end
 
+	-- Chips are laid out right-to-left: each one claims a 28px slot plus
+	-- a 6px gap, so optional chips can be added without hand-tuning offsets.
+	local chipX = -8
+	local function nextChipX()
+		local x = chipX
+		chipX = chipX - (28 + 6)
+		return x
+	end
+
 	-- Close button
-	local CloseBtn = MakeHeaderChip("×", -8)
+	local CloseBtn = MakeHeaderChip("×", nextChipX())
 
 	-- Minimize button (shifted left to make room for the close button)
-	local MinBtn = MakeHeaderChip("–", -8 - 28 - 6)
+	local MinBtn = MakeHeaderChip("–", nextChipX())
 
 	-- Discord button (optional, off by default)
 	-- Options.Discord = true enables it. Clicking copies the invite link
 	-- to the clipboard via setclipboard (when the executor supports it).
-	local DISCORD_INVITE  = "https://discord.gg/vonhub"
-	local DISCORD_ICON_ID = "https://files.catbox.moe/vfjexk.png" -- simple Discord mark; swap if it doesn't render for you
+	local DISCORD_INVITE    = "https://discord.gg/vonhub"
+	-- The Discord mark is fetched from the web and cached as a PNG in the
+	-- executor workspace (see FetchCachedImage). DISCORD_ICON_ID is only
+	-- the fallback shown while the download runs or when the executor has
+	-- no writefile/getcustomasset.
+	local DISCORD_ICON_URL  = "https://files.catbox.moe/gvgnul.png"
+	local DISCORD_ICON_FILE = "UILib_discord.png"
+	local DISCORD_ICON_ID   = "rbxassetid://94434236999817"
 
 	local DiscordBtn
 	if showDiscord then
 		DiscordBtn = Instance.new("TextButton")
 		DiscordBtn.Size                   = UDim2.new(0, 28, 0, 20)
 		DiscordBtn.AnchorPoint            = Vector2.new(1, 0.5)
-		DiscordBtn.Position               = UDim2.new(1, -8 - 28 - 6 - 28 - 6, 0.5, 0)
+		DiscordBtn.Position               = UDim2.new(1, nextChipX(), 0.5, 0)
 		DiscordBtn.BackgroundColor3       = AccentDim
 		DiscordBtn.BorderSizePixel        = 0
 		DiscordBtn.Text                   = ""
@@ -1466,14 +2065,24 @@ function UILib.CreatePanel(Options)
 		MakeRipple(DiscordBtn, Theme.AccentSec, 7)
 
 		local DiscordIcon = Instance.new("ImageLabel")
-		DiscordIcon.Size                   = UDim2.new(0, 14, 0, 14)
+		DiscordIcon.Size                   = UDim2.new(0, 16, 0, 16)
 		DiscordIcon.AnchorPoint            = Vector2.new(0.5, 0.5)
 		DiscordIcon.Position               = UDim2.new(0.5, 0, 0.5, 0)
 		DiscordIcon.BackgroundTransparency = 1
 		DiscordIcon.Image                  = DISCORD_ICON_ID
 		DiscordIcon.ImageColor3            = Theme.AccentSec
+		DiscordIcon.ScaleType              = Enum.ScaleType.Fit
 		DiscordIcon.ZIndex                 = 5
 		DiscordIcon.Parent                 = DiscordBtn
+
+		-- Swap in the cached PNG once it's available (first run downloads
+		-- it, later runs read it straight from the workspace file).
+		task.spawn(function()
+			local asset = FetchCachedImage(DISCORD_ICON_URL, DISCORD_ICON_FILE)
+			if asset and DiscordIcon.Parent then
+				DiscordIcon.Image = asset
+			end
+		end)
 
 		DiscordBtn.MouseButton1Click:Connect(function()
 			if setclipboard then
@@ -1494,11 +2103,60 @@ function UILib.CreatePanel(Options)
 		end)
 	end
 
+	-- Search button (optional, on by default)
+	-- Options.Search = false disables it. Clicking swaps the title for a
+	-- search box; typing live-filters every tab's rows by their text.
+	-- The glyph is lucide's "search" from the icon set WindUI ships with.
+	local SEARCH_ICON_ID = "rbxassetid://121018724060431"
+	local SearchBtn, SearchIcon, SearchBox
+	if showSearch then
+		SearchBtn = MakeHeaderChip("", nextChipX())
+		SearchBtn.Name = "Search"
+
+		SearchIcon = Instance.new("ImageLabel")
+		SearchIcon.Size                   = UDim2.new(0, 13, 0, 13)
+		SearchIcon.AnchorPoint            = Vector2.new(0.5, 0.5)
+		SearchIcon.Position               = UDim2.new(0.5, 0, 0.5, 0)
+		SearchIcon.BackgroundTransparency = 1
+		SearchIcon.Image                  = SEARCH_ICON_ID
+		SearchIcon.ImageColor3            = Theme.AccentSec
+		SearchIcon.ZIndex                 = 5
+		SearchIcon.Parent                 = SearchBtn
+
+		-- The box takes over the title's slot so nothing else in the
+		-- header has to move; it is only visible while search is open.
+		SearchBox = Instance.new("TextBox")
+		SearchBox.Name                   = "SearchBox"
+		SearchBox.Size                   = UDim2.new(1, -(reservedRight + TITLE_X), 0, 22)
+		SearchBox.AnchorPoint            = Vector2.new(0, 0.5)
+		SearchBox.Position               = UDim2.new(0, TITLE_X, 0.5, 0)
+		SearchBox.BackgroundColor3       = Theme.InputBg
+		SearchBox.BackgroundTransparency = 0.10
+		SearchBox.BorderSizePixel        = 0
+		SearchBox.Font                   = Theme.FontMedium
+		SearchBox.TextSize               = Theme.SmallSize
+		SearchBox.TextColor3             = Theme.TextPrimary
+		SearchBox.PlaceholderText        = "Search…"
+		SearchBox.PlaceholderColor3      = Theme.TextMuted
+		SearchBox.TextXAlignment         = Enum.TextXAlignment.Left
+		SearchBox.TextTruncate           = Enum.TextTruncate.AtEnd
+		SearchBox.ClearTextOnFocus       = false
+		SearchBox.Text                   = ""
+		SearchBox.Visible                = false
+		SearchBox.ZIndex                 = 4
+		SearchBox.Parent                 = Header
+		MakeCorner(SearchBox, UDim.new(0, 7))
+		MakeEdge(SearchBox, Accent, 1, 0.55)
+		MakePadding(SearchBox, 8, 8, 0, 0)
+	end
+
 	-- ── Tab bar (optional) ─────────────────────────────────
 	-- "top"  — horizontal bar of equal-width buttons under the header
 	-- "left" — vertical rail of full-width buttons beside the content
 	local TabBar, TabBtns, TabUnderline, TabInd
 	local tabGrads = {}
+	local tabIcons = {}   -- index -> ImageLabel (only tabs that have one)
+	local TAB_ICON = 14
 	local tabGap, tabW = 6, 0
 	local SIDE_TAB_H, SIDE_TAB_GAP, SIDE_TAB_TOP = 28, 4, 8
 	if hasTabs and not sideTabs then
@@ -1631,6 +2289,26 @@ function UILib.CreatePanel(Options)
 		MakeAccentFill(TabInd, Accent)
 	end
 
+	-- Icons on tabs. Top tabs centre their text, so the icon rides the
+	-- text (InlineIcon); the side rail is left-aligned, so the icon
+	-- simply widens the rail's padding (PadIcon). Also the backing for
+	-- SetTabIcon, which re-points an existing icon or adds one late.
+	local function makeTabIcon(i, spec)
+		local btn = TabBtns and TabBtns[i]
+		if not btn then return nil end
+		if tabIcons[i] then
+			SetIconImage(tabIcons[i], spec)
+			return tabIcons[i]
+		end
+		if spec == nil or spec == "" then return nil end
+		local color = (i == activeTab) and Theme.ActiveTabText or Theme.TextMuted
+		tabIcons[i] = sideTabs
+			and PadIcon(btn, spec, TAB_ICON, color, 6)
+			or  InlineIcon(btn, spec, TAB_ICON, color, 5)
+		return tabIcons[i]
+	end
+	for i, spec in pairs(tabIconSpecs) do makeTabIcon(i, spec) end
+
 	-- ── Content area ───────────────────────────────────────
 	-- One scrolling frame per tab (or just one if no tabs)
 	local tabCount  = hasTabs and #Tabs or 1
@@ -1696,6 +2374,13 @@ function UILib.CreatePanel(Options)
 			btn.Font = on and Theme.FontBold or Theme.FontMedium
 			if tabGrads[i] then
 				tabGrads[i].Color = on and GRAD_ON or GRAD_OFF
+			end
+			if tabIcons[i] then
+				if animate then
+					TweenService:Create(tabIcons[i], TweenFast, { ImageColor3 = text }):Play()
+				else
+					tabIcons[i].ImageColor3 = text
+				end
 			end
 		end
 		if TabInd then
@@ -1767,6 +2452,7 @@ function UILib.CreatePanel(Options)
 	local MIN_BTN_W     = 28   -- MinBtn.Size.X
 	local CLOSE_BTN_W   = 28   -- CloseBtn.Size.X
 	local DISCORD_BTN_W = showDiscord and (28 + 6) or 0  -- DiscordBtn.Size.X + gap, if present
+	local SEARCH_BTN_W  = showSearch  and (28 + 6) or 0  -- SearchBtn.Size.X + gap, if present
 	local BTN_GAP       = 6    -- gap between MinBtn and CloseBtn
 	local MIN_BTN_RIGHT = 8    -- CloseBtn's right margin (see Position above)
 	local TITLE_GAP     = 10   -- breathing room between title text and buttons
@@ -1789,7 +2475,7 @@ function UILib.CreatePanel(Options)
 			w = w + SUB_GAP + SUB_PADX
 			   + measureText(plainSubTitle, Theme.CaptionSize, Theme.FontMedium)
 		end
-		w = w + TITLE_GAP + DISCORD_BTN_W + MIN_BTN_W + BTN_GAP + CLOSE_BTN_W + MIN_BTN_RIGHT
+		w = w + TITLE_GAP + SEARCH_BTN_W + DISCORD_BTN_W + MIN_BTN_W + BTN_GAP + CLOSE_BTN_W + MIN_BTN_RIGHT
 		-- Clamp to the panel's own width so minimizing never makes the
 		-- window *wider*; a title long enough to hit that ceiling simply
 		-- truncates instead.
@@ -1799,10 +2485,16 @@ function UILib.CreatePanel(Options)
 	local isMinimized = Options.Minimized == true
 	local minimizeToken = 0
 
+	-- Defined further down (search / resize sections); declared here so
+	-- the minimize logic can reach them.
+	local ScaleBtn
+	local SetSearchOpen = function() end
+
 	local function setBodyVisible(visible)
 		if TabBar       then TabBar.Visible       = visible end
 		if TabUnderline then TabUnderline.Visible = visible end
 		if TabInd       then TabInd.Visible       = visible end
+		if ScaleBtn     then ScaleBtn.Visible     = visible end
 		if visible then
 			for i, sf in ipairs(tabFrames) do
 				if hasTabs then
@@ -1866,6 +2558,8 @@ function UILib.CreatePanel(Options)
 	local function SetMinimized(minimized)
 		if isMinimized == minimized then return end
 		isMinimized = minimized
+		-- A search box has nowhere to live in a collapsed header.
+		if minimized then SetSearchOpen(false) end
 		applyMinimize(false)
 	end
 
@@ -1878,6 +2572,223 @@ function UILib.CreatePanel(Options)
 	MinBtn.MouseLeave:Connect(function()
 		TweenService:Create(MinBtn, TweenFast, { BackgroundColor3 = AccentDim }):Play()
 	end)
+
+	-- ── Search ─────────────────────────────────────────────
+	-- Rows are the direct children of each tab's scrolling frame. A row
+	-- matches when any text inside it (its own label, a section title, a
+	-- toggle's caption…) contains the query, case-insensitively. Rows the
+	-- search hides are remembered so clearing it restores exactly those
+	-- and never un-hides something the caller hid on purpose.
+	local searchOpen   = false
+	local searchHidden = {}   -- row -> true while hidden by the search
+
+	local function rowMatches(row, q)
+		local objs = row:GetDescendants()
+		table.insert(objs, row)
+		for _, d in ipairs(objs) do
+			if (d:IsA("TextLabel") or d:IsA("TextButton")) and d.Text ~= "" then
+				-- RichText labels carry markup; strip it so "<font" can't match.
+				local plain = string.lower((string.gsub(d.Text, "<[^>]->", "")))
+				if string.find(plain, q, 1, true) then return true end
+			end
+		end
+		return false
+	end
+
+	local function applySearch(query)
+		local q = string.lower(query or "")
+		local hits = {}
+		for i, sf in ipairs(tabFrames) do
+			local n = 0
+			for _, row in ipairs(sf:GetChildren()) do
+				if row:IsA("GuiObject") then
+					if q == "" or rowMatches(row, q) then
+						if searchHidden[row] then
+							row.Visible = true
+							searchHidden[row] = nil
+						end
+						if row.Visible then n = n + 1 end
+					elseif row.Visible then
+						row.Visible = false
+						searchHidden[row] = true
+					end
+				end
+			end
+			hits[i] = n
+		end
+		-- Nothing on the current tab but hits elsewhere: jump to the first
+		-- tab that has some, so a search never looks like it found nothing.
+		if q ~= "" and hasTabs and hits[activeTab] == 0 then
+			for i, n in ipairs(hits) do
+				if n > 0 then SetTab(i) break end
+			end
+		end
+	end
+
+	SetSearchOpen = function(open)
+		if not SearchBtn then return end
+		open = open == true
+		if open == searchOpen then return end
+		if open and isMinimized then SetMinimized(false) end
+		searchOpen = open
+
+		-- Only the title and subtitle give way to the box; the header
+		-- icon stays put, like the pip does, so the window keeps its
+		-- identity while you type.
+		TitleLabel.Visible = not open
+		if SubPill then SubPill.Visible = (not open) and plainSubTitle ~= "" end
+		SearchBox.Visible = open
+		SearchBox.Text    = ""
+		TweenService:Create(SearchIcon, TweenFast,
+			{ ImageColor3 = open and Theme.Accent or Theme.AccentSec }):Play()
+		TweenService:Create(SearchBtn, TweenFast,
+			{ BackgroundColor3 = open and Theme.ToggleOn or AccentDim }):Play()
+
+		if open then
+			-- Deferred: focusing in the same frame the box becomes visible
+			-- is dropped by the engine.
+			task.defer(function()
+				if SearchBox.Parent and searchOpen then SearchBox:CaptureFocus() end
+			end)
+		else
+			SearchBox:ReleaseFocus()
+			applySearch("")
+		end
+	end
+
+	if SearchBtn then
+		SearchBtn.MouseButton1Click:Connect(function()
+			SetSearchOpen(not searchOpen)
+		end)
+		SearchBtn.MouseEnter:Connect(function()
+			TweenService:Create(SearchBtn, TweenFast, { BackgroundColor3 = Theme.ToggleOn }):Play()
+		end)
+		SearchBtn.MouseLeave:Connect(function()
+			if searchOpen then return end
+			TweenService:Create(SearchBtn, TweenFast, { BackgroundColor3 = AccentDim }):Play()
+		end)
+		SearchBox:GetPropertyChangedSignal("Text"):Connect(function()
+			if searchOpen then applySearch(SearchBox.Text) end
+		end)
+		-- Escape closes and clears. Enter or clicking away keeps the
+		-- filter in place so the user can interact with what they found.
+		SearchBox.FocusLost:Connect(function(enterPressed, inp)
+			if typeof(inp) == "Instance" and inp:IsA("InputObject")
+			and inp.KeyCode == Enum.KeyCode.Escape then
+				SetSearchOpen(false)
+			end
+		end)
+	end
+
+	-- ── Resize grip (optional, off by default) ─────────────
+	-- Options.Scaler = true adds a small grip in the bottom-right corner.
+	-- Dragging it resizes the panel between MinSize and MaxSize (each axis
+	-- clamped on its own; defaults are half and double the initial size).
+	-- Width / FULL_H are rebound on every change, so minimize/restore and
+	-- the title layout keep working at the new size.
+	local SCALE_ICON_ID = "rbxassetid://122360365318466"   -- lucide "scaling"
+
+	local function sizePair(v)
+		if typeof(v) == "Vector2" then return v.X, v.Y end
+		if typeof(v) == "UDim2"   then return v.X.Offset, v.Y.Offset end
+		if type(v) == "table" then
+			return v[1] or v.X or v.Width or v.w, v[2] or v.Y or v.Height or v.h
+		end
+		return nil, nil
+	end
+	local minSizeW, minSizeH = sizePair(Options.MinSize)
+	local maxSizeW, maxSizeH = sizePair(Options.MaxSize)
+	local MIN_W = Options.MinWidth  or minSizeW or math.floor(Width  / 2)
+	local MIN_H = Options.MinHeight or minSizeH or math.floor(FULL_H / 2)
+	local MAX_W = Options.MaxWidth  or maxSizeW or Width  * 2
+	local MAX_H = Options.MaxHeight or maxSizeH or FULL_H * 2
+	-- The body can never collapse past the header and tab bar.
+	MIN_H = math.max(MIN_H, HEADER_H + TABBAR_H + 24)
+	MIN_W = math.max(MIN_W, 90)
+	MAX_W = math.max(MAX_W, MIN_W)
+	MAX_H = math.max(MAX_H, MIN_H)
+
+	-- Re-derives everything that was sized from Width at build time.
+	local function relayoutForSize()
+		layoutTitle()
+		if hasTabs and not sideTabs and TabBtns then
+			tabW = (Width - 20 - tabGap * (#Tabs - 1)) / #Tabs
+			for _, btn in ipairs(TabBtns) do
+				btn.Size = UDim2.new(0, tabW, 1, 0)
+			end
+			if TabInd then
+				TabInd.Size     = UDim2.new(0, math.floor(tabW), 0, 2)
+				TabInd.Position = tabIndicatorTarget(activeTab)
+			end
+		end
+	end
+
+	local function SetSize(w, h)
+		w = math.floor(tonumber(w) or Width)
+		h = math.floor(tonumber(h) or FULL_H)
+		if showScaler then
+			w = math.clamp(w, MIN_W, MAX_W)
+			h = math.clamp(h, MIN_H, MAX_H)
+		end
+		Width  = w
+		FULL_H = h
+		if not isMinimized then
+			Frame.Size = UDim2.new(0, Width, 0, FULL_H)
+		end
+		relayoutForSize()
+	end
+
+	if showScaler then
+		ScaleBtn = Instance.new("ImageButton")
+		ScaleBtn.Name                   = "ResizeGrip"
+		ScaleBtn.Size                   = UDim2.new(0, 16, 0, 16)
+		ScaleBtn.AnchorPoint            = Vector2.new(1, 1)
+		ScaleBtn.Position               = UDim2.new(1, -5, 1, -5)
+		ScaleBtn.BackgroundTransparency = 1
+		ScaleBtn.Image                  = SCALE_ICON_ID
+		ScaleBtn.ImageColor3            = Theme.TextMuted
+		ScaleBtn.ImageTransparency      = 0.25
+		ScaleBtn.AutoButtonColor        = false
+		ScaleBtn.ZIndex                 = 8
+		ScaleBtn.Visible                = not isMinimized
+		ScaleBtn.Parent                 = Frame
+
+		local resizing, resizeStart, startW, startH = false, nil, 0, 0
+		local function restGrip()
+			if resizing then return end
+			TweenService:Create(ScaleBtn, TweenFast,
+				{ ImageColor3 = Theme.TextMuted, ImageTransparency = 0.25 }):Play()
+		end
+		ScaleBtn.MouseEnter:Connect(function()
+			TweenService:Create(ScaleBtn, TweenFast,
+				{ ImageColor3 = Accent, ImageTransparency = 0 }):Play()
+		end)
+		ScaleBtn.MouseLeave:Connect(restGrip)
+		ScaleBtn.InputBegan:Connect(function(inp)
+			if inp.UserInputType ~= Enum.UserInputType.MouseButton1
+			and inp.UserInputType ~= Enum.UserInputType.Touch then return end
+			if isMinimized then return end
+			resizing    = true
+			resizeStart = inp.Position
+			startW, startH = Width, FULL_H
+			TweenService:Create(ScaleBtn, TweenFast,
+				{ ImageColor3 = Accent, ImageTransparency = 0 }):Play()
+		end)
+		ConnectScoped(Gui, UserInputService.InputEnded, function(inp)
+			if not resizing then return end
+			if inp.UserInputType ~= Enum.UserInputType.MouseButton1
+			and inp.UserInputType ~= Enum.UserInputType.Touch then return end
+			resizing = false
+			restGrip()
+		end)
+		ConnectScoped(Gui, UserInputService.InputChanged, function(inp)
+			if not resizing then return end
+			if inp.UserInputType ~= Enum.UserInputType.MouseMovement
+			and inp.UserInputType ~= Enum.UserInputType.Touch then return end
+			local d = inp.Position - resizeStart
+			SetSize(startW + d.X, startH + d.Y)
+		end)
+	end
 
 	local function CloseWindow()
 		if Gui then Gui:Destroy() end
@@ -1953,12 +2864,49 @@ function UILib.CreatePanel(Options)
 		end
 	end
 
+	-- Swaps the header icon at runtime. Passing nil brings the pip back.
+	-- TITLE_X is an upvalue of layoutTitle / computeMinimizedWidth, so
+	-- re-assigning it here is enough for those; only the things sized
+	-- from it at build time need touching by hand.
+	local function SetTitleIcon(spec)
+		if spec == nil or spec == "" then
+			if TitleIcon then TitleIcon:Destroy() end
+			TitleIcon        = nil
+			TitlePip.Visible = true
+			TITLE_X          = TITLE_X_PIP
+		else
+			if not TitleIcon then
+				TitleIcon = MakeIcon(Header, spec, TITLE_ICON, Theme.AccentSec, 3)
+				TitleIcon.Name        = "TitleIcon"
+				TitleIcon.AnchorPoint = Vector2.new(0, 0.5)
+				TitleIcon.Position    = UDim2.new(0, 11, 0.5, 0)
+			else
+				SetIconImage(TitleIcon, spec)
+			end
+			TitlePip.Visible = false
+			TITLE_X          = TITLE_X_ICON
+		end
+		TitleLabel.Position = UDim2.new(0, TITLE_X, 0, 0)
+		if SearchBox then
+			SearchBox.Position = UDim2.new(0, TITLE_X, 0.5, 0)
+			SearchBox.Size     = UDim2.new(1, -(reservedRight + TITLE_X), 0, 22)
+		end
+		layoutTitle()
+		if isMinimized then
+			Frame.Size = UDim2.new(0, computeMinimizedWidth(), 0, HEADER_H)
+		end
+	end
+
 	-- ── Return ─────────────────────────────────────────────
 	return {
 		Gui          = Gui,
 		Frame        = Frame,
 		Header       = Header,
 		TitleLabel   = TitleLabel,
+		GetTitleIcon = function() return TitleIcon end,
+		SetIcon      = SetTitleIcon,
+		SetTabIcon   = makeTabIcon,
+		GetTabIcon   = function(i) return tabIcons[i] end,
 		-- Content is the first (or only) tab frame for convenience
 		Content      = tabFrames[1],
 		GetTab       = function(i) return tabFrames[i] end,
@@ -1991,6 +2939,17 @@ function UILib.CreatePanel(Options)
 		CloseBtn     = CloseBtn,
 		Close        = CloseWindow,
 		DiscordBtn   = DiscordBtn,
+		SearchBtn    = SearchBtn,
+		SetSearchOpen = SetSearchOpen,
+		IsSearchOpen = function() return searchOpen end,
+		SetSearch    = function(text)
+			if not SearchBox then return end
+			SetSearchOpen(true)
+			SearchBox.Text = tostring(text or "")
+		end,
+		ScaleBtn     = ScaleBtn,
+		SetSize      = SetSize,
+		GetSize      = function() return Width, FULL_H end,
 		Accent       = Accent,
 		AccentDim    = AccentDim,
 	}
@@ -2004,11 +2963,12 @@ end
 --
 -- Options:
 --   Title     string   Section label
+--   Icon      string   Lucide icon before the label (optional)
 --   Open      bool     Start open (default false)
 --   Tooltip   string   Hover tooltip (optional)
 --
 -- Returns:
---   { Frame, Content, SetOpen(bool), IsOpen(), SetTitle(text) }
+--   { Frame, Content, SetOpen(bool), IsOpen(), SetTitle(text), SetIcon(spec) }
 -- ============================================================
 function UILib.CreateSection(Parent, Options)
 	Options = Options or {}
@@ -2067,6 +3027,8 @@ function UILib.CreateSection(Parent, Options)
 	TitleLbl.TextXAlignment         = Enum.TextXAlignment.Left
 	TitleLbl.Text                   = title
 
+	local SecIcon = Options.Icon and PrefixIcon(TitleLbl, Options.Icon, 14, Theme.Accent) or nil
+
 	-- Arrow indicator
 	local Arrow = Instance.new("TextLabel", HeaderRow)
 	Arrow.Size                   = UDim2.new(0, 20, 1, 0)
@@ -2122,6 +3084,10 @@ function UILib.CreateSection(Parent, Options)
 			{ Size = UDim2.new(0, 3, 0, open and 18 or 12) }):Play()
 		TweenService:Create(TitleLbl, TweenFast,
 			{ TextColor3 = open and Theme.AccentSec or Theme.Accent }):Play()
+		if SecIcon then
+			TweenService:Create(SecIcon, TweenFast,
+				{ ImageColor3 = open and Theme.AccentSec or Theme.Accent }):Play()
+		end
 	end
 	SetOpen(startOpen)
 
@@ -2136,6 +3102,14 @@ function UILib.CreateSection(Parent, Options)
 		SetOpen  = SetOpen,
 		IsOpen   = function() return isOpen end,
 		SetTitle = function(t) TitleLbl.Text = t or "" end,
+		SetIcon  = function(spec)
+			if SecIcon then
+				SetIconImage(SecIcon, spec)
+			elseif spec and spec ~= "" then
+				SecIcon = PrefixIcon(TitleLbl, spec, 14, TitleLbl.TextColor3)
+			end
+		end,
+		Icon     = SecIcon,
 	}
 end
 
@@ -2153,8 +3127,10 @@ end
 --   Confirm     bool     First click arms the button ("Confirm?"),
 --                        second click within 2s fires OnClick
 --   ConfirmText string   Armed label (default "Confirm?")
+--   Icon        string   Lucide icon left of the label (optional)
+--   IconColor   Color3   Resting icon colour (default TextColor)
 --
--- Returns: { Frame, Button, SetText(text), SetDisabled(bool) }
+-- Returns: { Frame, Button, SetText(text), SetDisabled(bool), SetIcon(spec) }
 -- ============================================================
 function UILib.CreateButton(Parent, Options)
 	Options = Options or {}
@@ -2193,6 +3169,15 @@ function UILib.CreateButton(Parent, Options)
 	MakeRipple(Btn, Theme.Accent, RowRadius)
 	local playShine = MakeShine(Btn, RowRadius, RowBg)
 
+	-- Optional icon riding just left of the centred label. Added after
+	-- the ripple so InlineIcon can widen the ripple host past the
+	-- padding it introduces.
+	local iconRest = Options.IconColor or Options.TextColor or Theme.TextPrimary
+	local BtnIcon
+	if Options.Icon then
+		BtnIcon = InlineIcon(Btn, Options.Icon, Options.IconSize or 14, iconRest, 6)
+	end
+
 	-- A hairline that grows out of the centre on hover. It gives the row
 	-- a focal point, which a uniform background tint never does.
 	local Underline = Instance.new("Frame")
@@ -2225,6 +3210,7 @@ function UILib.CreateButton(Parent, Options)
 		if disabled then return end
 		TweenService:Create(RowBg,     TweenFast, { BackgroundColor3 = hoverColor }):Play()
 		TweenService:Create(Btn,       TweenFast, { TextColor3 = Theme.Accent }):Play()
+		if BtnIcon then TweenService:Create(BtnIcon, TweenFast, { ImageColor3 = Theme.Accent }):Play() end
 		TweenService:Create(BtnScale,  TweenFast, { Scale = 1.02 }):Play()
 		TweenService:Create(RowEdge,   TweenFast, { Color = Theme.Accent, Transparency = 0.05 }):Play()
 		TweenService:Create(Underline, TweenSpring, { Size = UDim2.new(0.5, 0, 0, 2) }):Play()
@@ -2234,6 +3220,7 @@ function UILib.CreateButton(Parent, Options)
 		if disabled then return end
 		TweenService:Create(RowBg,     TweenFast, { BackgroundColor3 = restColor }):Play()
 		TweenService:Create(Btn,       TweenFast, { TextColor3 = Options.TextColor or Theme.TextPrimary }):Play()
+		if BtnIcon then TweenService:Create(BtnIcon, TweenFast, { ImageColor3 = iconRest }):Play() end
 		TweenService:Create(BtnScale,  TweenFast, { Scale = 1 }):Play()
 		TweenService:Create(RowEdge,   TweenFast, { Color = EdgeRest(), Transparency = Theme.StrokeAlpha or 0.34 }):Play()
 		TweenService:Create(Underline, TweenFast, { Size = UDim2.new(0, 0, 0, 2) }):Play()
@@ -2265,6 +3252,7 @@ function UILib.CreateButton(Parent, Options)
 		TweenService:Create(RowEdge, TweenFast,
 			{ Color = EdgeRest(), Transparency = Theme.StrokeAlpha or 0.34 }):Play()
 		TweenService:Create(Underline, TweenFast, { Size = UDim2.new(0, 0, 0, 2) }):Play()
+		if BtnIcon then TweenService:Create(BtnIcon, TweenFast, { ImageColor3 = iconRest }):Play() end
 	end
 
 	Btn.MouseButton1Click:Connect(function()
@@ -2275,6 +3263,7 @@ function UILib.CreateButton(Parent, Options)
 			local myToken = armToken
 			Btn.Text = Options.ConfirmText or "Confirm?"
 			TweenService:Create(Btn, TweenFast, { TextColor3 = Theme.Warning }):Play()
+			if BtnIcon then TweenService:Create(BtnIcon, TweenFast, { ImageColor3 = Theme.Warning }):Play() end
 			TweenService:Create(RowEdge, TweenFast,
 				{ Color = Theme.Warning, Transparency = 0 }):Play()
 			TweenService:Create(Underline, TweenSpring,
@@ -2295,6 +3284,7 @@ function UILib.CreateButton(Parent, Options)
 		disabled = on == true
 		if armed then disarm() end
 		TweenService:Create(Btn,   TweenFast, { TextTransparency = disabled and 0.55 or 0 }):Play()
+		if BtnIcon then TweenService:Create(BtnIcon, TweenFast, { ImageTransparency = disabled and 0.55 or 0 }):Play() end
 		TweenService:Create(RowBg, TweenFast, { BackgroundColor3 = restColor }):Play()
 		TweenService:Create(RowEdge, TweenFast, {
 			Transparency = disabled and 0.75 or (Theme.StrokeAlpha or 0.34),
@@ -2308,6 +3298,14 @@ function UILib.CreateButton(Parent, Options)
 		Button      = Btn,
 		SetText     = function(t) baseText = t or ""; if not armed then Btn.Text = baseText end end,
 		SetDisabled = SetDisabled,
+		SetIcon     = function(spec)
+			if BtnIcon then
+				SetIconImage(BtnIcon, spec)
+			elseif spec and spec ~= "" then
+				BtnIcon = InlineIcon(Btn, spec, Options.IconSize or 14, iconRest, 6)
+			end
+		end,
+		Icon        = BtnIcon,
 	}
 end
 
@@ -2322,6 +3320,7 @@ end
 --   Tooltip      string   Hover tooltip (optional)
 --   Flag         string   Config key for SaveConfig/LoadConfig
 --
+--   Icon         string   Lucide icon before the label (optional)
 -- Returns: { Frame, Set(bool), GetValue(), SetDisabled(bool) }
 -- ============================================================
 function UILib.CreateToggle(Parent, Options)
@@ -2354,6 +3353,7 @@ function UILib.CreateToggle(Parent, Options)
 	Lbl.TextColor3             = Theme.TextPrimary
 	Lbl.TextXAlignment         = Enum.TextXAlignment.Left
 	Lbl.Text                   = Options.Label or ""
+	if Options.Icon then PrefixIcon(Lbl, Options.Icon, 14, Theme.TextPrimary) end
 
 	-- Track
 	local Track = Instance.new("Frame", Row)
@@ -2482,6 +3482,7 @@ end
 --   Tooltip      string   Hover tooltip (optional)
 --   Flag         string   Config key for SaveConfig/LoadConfig
 --
+--   Icon         string   Lucide icon before the label (optional)
 -- Returns: { Frame, TextBox, GetValue() }
 -- ============================================================
 function UILib.CreateTextInput(Parent, Options)
@@ -2506,6 +3507,7 @@ function UILib.CreateTextInput(Parent, Options)
 	Lbl.TextColor3             = Theme.TextPrimary
 	Lbl.TextXAlignment         = Enum.TextXAlignment.Left
 	Lbl.Text                   = Options.Label or ""
+	if Options.Icon then PrefixIcon(Lbl, Options.Icon, 14, Theme.TextPrimary) end
 
 	local Box = Instance.new("TextBox", Row)
 	Box.AnchorPoint       = Vector2.new(1, 0.5)
@@ -2598,6 +3600,7 @@ end
 --   Tooltip    string  Hover tooltip (optional)
 --   Flag       string  Config key for SaveConfig/LoadConfig
 --
+--   Icon       string   Lucide icon before the label (optional)
 -- Returns: { Frame, Update(value), GetValue() }
 -- ============================================================
 function UILib.CreateSlider(Parent, Options)
@@ -2618,7 +3621,7 @@ function UILib.CreateSlider(Parent, Options)
 
 	local LabelW = 0
 	if Options.Label and Options.Label ~= "" then
-		LabelW = 80
+		LabelW = Options.Icon and 100 or 80
 		local Lbl = Instance.new("TextLabel", Row)
 		Lbl.Size             = UDim2.new(0, LabelW, 1, 0)
 		Lbl.Position         = UDim2.new(0, 12, 0, 0)
@@ -2629,6 +3632,7 @@ function UILib.CreateSlider(Parent, Options)
 		Lbl.TextXAlignment   = Enum.TextXAlignment.Left
 		Lbl.TextTruncate     = Enum.TextTruncate.AtEnd
 		Lbl.Text             = Options.Label
+		if Options.Icon then PrefixIcon(Lbl, Options.Icon, 14, Theme.TextPrimary) end
 	end
 
 	local ValLbl = Instance.new("TextLabel", Row)
@@ -2759,6 +3763,7 @@ end
 --   Height      number    Scroll area height (default 120)
 --   Flag        string    Config key for SaveConfig/LoadConfig
 --
+--   Icon        string   Lucide icon before the label (optional)
 -- Returns:
 --   { Frame, GetValues(), SetValue(i, text) }
 -- ============================================================
@@ -2797,6 +3802,7 @@ function UILib.CreateInputList(Parent, Options)
 	Lbl.TextColor3             = Theme.TextPrimary
 	Lbl.TextXAlignment         = Enum.TextXAlignment.Left
 	Lbl.Text                   = label
+	if Options.Icon then PrefixIcon(Lbl, Options.Icon, 14, Theme.TextPrimary) end
 
 	local Div = Instance.new("Frame", Card)
 	Div.Size             = UDim2.new(1, -16, 0, 1)
@@ -3149,10 +4155,30 @@ local function _repositionNotifs()
 	end
 end
 
-function UILib.ShowNotification(Title, Text, Duration)
+-- ShowNotification(Title, Text, Duration, Icon)
+-- or ShowNotification({ Title=, Text=, Duration=, Icon= })
+-- Icon is a lucide spec, or one of "success" | "warning" | "error" |
+-- "info", which also tints the banner's rail with the matching
+-- semantic colour.
+local NOTIF_KINDS = {
+	success = { "circle-check",   "Success" },
+	warning = { "triangle-alert", "Warning" },
+	error   = { "circle-x",       "Danger"  },
+	danger  = { "circle-x",       "Danger"  },
+	info    = { "info",           "Info"    },
+}
+function UILib.ShowNotification(Title, Text, Duration, Icon)
 	_ensureNotifGui()
 
+	if type(Title) == "table" then
+		local o = Title
+		Title, Text, Duration, Icon = o.Title, o.Text or o.Content, o.Duration, o.Icon
+	end
 	local dur = tonumber(Duration) or 2.5
+
+	local kind = type(Icon) == "string" and NOTIF_KINDS[string.lower(Icon)] or nil
+	local iconSpec  = kind and kind[1] or Icon
+	local iconColor = kind and Theme[kind[2]] or Theme.AccentSec
 
 	local F = Instance.new("Frame", _notifSg)
 	F.Size                   = UDim2.new(0, NOTIF_W, 0, NOTIF_H)
@@ -3177,14 +4203,23 @@ function UILib.ShowNotification(Title, Text, Duration)
 	Bar.BorderSizePixel  = 0
 	Bar.ZIndex           = 2
 	MakeCorner(Bar, UDim.new(1, 0))
-	MakeAccentFill(Bar, Theme.Accent)
+	MakeAccentFill(Bar, kind and iconColor or Theme.Accent)
+
+	-- Optional icon between the rail and the text
+	local textX, textW = 16, -26
+	if iconSpec then
+		local NI = MakeIcon(F, iconSpec, 18, iconColor, 2)
+		NI.AnchorPoint = Vector2.new(0, 0.5)
+		NI.Position    = UDim2.new(0, 15, 0.5, 0)
+		textX, textW   = 15 + 18 + 7, -(26 + 18 + 6)
+	end
 
 	-- Title and body on separate lines. Packing both into one truncated
 	-- RichText run meant a long title ate the message; stacked, each gets
 	-- its own budget and its own weight.
 	local TitleLbl = Instance.new("TextLabel", F)
-	TitleLbl.Size                   = UDim2.new(1, -26, 0, 16)
-	TitleLbl.Position               = UDim2.new(0, 16, 0, 8)
+	TitleLbl.Size                   = UDim2.new(1, textW, 0, 16)
+	TitleLbl.Position               = UDim2.new(0, textX, 0, 8)
 	TitleLbl.BackgroundTransparency = 1
 	TitleLbl.Font                   = Theme.FontBold
 	TitleLbl.TextSize               = Theme.CaptionSize
@@ -3195,8 +4230,8 @@ function UILib.ShowNotification(Title, Text, Duration)
 	TitleLbl.Text                   = (Title or ""):upper()
 
 	local Lbl = Instance.new("TextLabel", F)
-	Lbl.Size                   = UDim2.new(1, -26, 0, 16)
-	Lbl.Position               = UDim2.new(0, 16, 0, 24)
+	Lbl.Size                   = UDim2.new(1, textW, 0, 16)
+	Lbl.Position               = UDim2.new(0, textX, 0, 24)
 	Lbl.BackgroundTransparency = 1
 	Lbl.Font                   = Theme.FontRegular
 	Lbl.TextSize               = Theme.SmallSize
@@ -3297,9 +4332,10 @@ end
 --
 -- Options:
 --   Title     string
+--   Icon      string   Lucide icon before the title (optional)
 --   Content   string   (also accepts Options.Text)
 --
--- Returns: { Frame, SetTitle(text), SetText(text) }
+-- Returns: { Frame, SetTitle(text), SetText(text), SetIcon(spec) }
 -- ============================================================
 function UILib.CreateParagraph(Parent, Options)
 	Options = Options or {}
@@ -3316,7 +4352,7 @@ function UILib.CreateParagraph(Parent, Options)
 	MakePadding(Card, 12, 12, 10, 10)
 	MakeListLayout(Card, Enum.FillDirection.Vertical, 4)
 
-	local TitleLbl
+	local TitleLbl, ParaIcon
 	if Options.Title and Options.Title ~= "" then
 		TitleLbl = Instance.new("TextLabel", Card)
 		TitleLbl.Size                   = UDim2.new(1, 0, 0, 0)
@@ -3329,6 +4365,9 @@ function UILib.CreateParagraph(Parent, Options)
 		TitleLbl.TextWrapped            = true
 		TitleLbl.LayoutOrder            = 0
 		TitleLbl.Text                   = Options.Title
+		if Options.Icon then
+			ParaIcon = PadIcon(TitleLbl, Options.Icon, 14, Theme.Accent)
+		end
 
 		-- Layout-safe because Card stacks vertically: the rule is simply
 		-- the next item in the list, not an overlay.
@@ -3363,6 +4402,13 @@ function UILib.CreateParagraph(Parent, Options)
 		Frame    = Card,
 		SetTitle = function(t) if TitleLbl then TitleLbl.Text = t end end,
 		SetText  = function(t) Body.Text = t end,
+		SetIcon  = function(spec)
+			if ParaIcon then
+				SetIconImage(ParaIcon, spec)
+			elseif TitleLbl and spec and spec ~= "" then
+				ParaIcon = PadIcon(TitleLbl, spec, 14, Theme.Accent)
+			end
+		end,
 	}
 end
 
@@ -3377,6 +4423,7 @@ end
 --   Default   number   (default Min)
 --   Format    string   string.format pattern for the percent text
 --                      (default "%d%%", receives 0-100)
+--   Icon      string   Lucide icon before the label (optional)
 --
 -- Returns: { Frame, Update(value, instant), GetValue() }
 -- ============================================================
@@ -3409,6 +4456,7 @@ function UILib.CreateProgressBar(Parent, Options)
 	Lbl.TextXAlignment         = Enum.TextXAlignment.Left
 	Lbl.TextTruncate           = Enum.TextTruncate.AtEnd
 	Lbl.Text                   = Options.Label or ""
+	if Options.Icon then PrefixIcon(Lbl, Options.Icon, 14, Theme.TextPrimary) end
 
 	local PctLbl = Instance.new("TextLabel", TopRow)
 	PctLbl.Size                   = UDim2.new(0, 46, 1, 0)
@@ -3737,6 +4785,7 @@ end
 --   Tooltip      string    Hover tooltip (optional)
 --   Flag         string    Config key for SaveConfig/LoadConfig
 --
+--   Icon         string   Lucide icon before the label (optional)
 -- Returns: { Frame, SetOpen(bool), GetValue(),
 --            SetItems(items, keepSelection) }
 -- ============================================================
@@ -3787,6 +4836,7 @@ function UILib.CreateDropdown(Parent, Options)
 		Lbl.TextColor3             = Theme.TextPrimary
 		Lbl.TextXAlignment         = Enum.TextXAlignment.Left
 		Lbl.Text                   = Options.Label
+		if Options.Icon then PrefixIcon(Lbl, Options.Icon, 14, Theme.TextPrimary) end
 	end
 
 	local ValueLbl = Instance.new("TextLabel", Head)
@@ -4066,6 +5116,7 @@ end
 --   Tooltip    string   Hover tooltip (optional)
 --   Flag       string   Config key for SaveConfig/LoadConfig
 --
+--   Icon       string   Lucide icon before the label (optional)
 -- Returns: { Frame, Set(keyCode), GetValue() }
 -- ============================================================
 function UILib.CreateKeybind(Parent, Options)
@@ -4093,6 +5144,7 @@ function UILib.CreateKeybind(Parent, Options)
 	Lbl.TextColor3             = Theme.TextPrimary
 	Lbl.TextXAlignment         = Enum.TextXAlignment.Left
 	Lbl.Text                   = Options.Label or ""
+	if Options.Icon then PrefixIcon(Lbl, Options.Icon, 14, Theme.TextPrimary) end
 
 	local KeyBtn = Instance.new("TextButton", Row)
 	KeyBtn.AnchorPoint            = Vector2.new(1, 0.5)
@@ -4489,6 +5541,7 @@ end
 --   Tooltip    string    Hover tooltip (optional)
 --   Flag       string    Config key for SaveConfig/LoadConfig
 --
+--   Icon       string   Lucide icon before the label (optional)
 -- Returns: { Frame, SetOpen(bool), SetValue(color3), GetValue() }
 -- ============================================================
 function UILib.CreateColorPicker(Parent, Options)
@@ -4527,6 +5580,7 @@ function UILib.CreateColorPicker(Parent, Options)
 	Lbl.TextColor3             = Theme.TextPrimary
 	Lbl.TextXAlignment         = Enum.TextXAlignment.Left
 	Lbl.Text                   = Options.Label or ""
+	if Options.Icon then PrefixIcon(Lbl, Options.Icon, 14, Theme.TextPrimary) end
 
 	local Swatch = Instance.new("Frame", Head)
 	Swatch.AnchorPoint      = Vector2.new(1, 0.5)
@@ -4854,6 +5908,7 @@ end
 --   Font       Enum.Font                 (default Theme.FontRegular)
 --   Alignment  Enum.TextXAlignment       (default Left)
 --   Height     number                    (default 18)
+--   Icon       string   Lucide icon before the text (optional)
 --
 -- Returns: { Frame, Label, SetText(text) }
 -- ============================================================
@@ -4871,6 +5926,7 @@ function UILib.CreateLabel(Parent, Options)
 	Lbl.TextTruncate           = Enum.TextTruncate.AtEnd
 	Lbl.Text                   = Options.Text or ""
 	Lbl.Parent                 = Parent
+	if Options.Icon then PadIcon(Lbl, Options.Icon, 14, Lbl.TextColor3) end
 
 	return {
 		Frame   = Lbl,
@@ -4889,6 +5945,7 @@ end
 --   Value      string | number   Initial value (default "-")
 --   Tooltip    string            Hover tooltip (optional)
 --
+--   Icon       string   Lucide icon before the label (optional)
 -- Returns: { Frame, SetValue(v), SetLabel(t), GetValue() }
 -- ============================================================
 function UILib.CreateKeyValue(Parent, Options)
@@ -4914,6 +5971,7 @@ function UILib.CreateKeyValue(Parent, Options)
 	KeyLbl.TextXAlignment         = Enum.TextXAlignment.Left
 	KeyLbl.TextTruncate           = Enum.TextTruncate.AtEnd
 	KeyLbl.Text                   = Options.Label or ""
+	if Options.Icon then PrefixIcon(KeyLbl, Options.Icon, 14, Theme.TextMuted) end
 
 	local ValLbl = Instance.new("TextLabel", Row)
 	ValLbl.Size                   = UDim2.new(0.5, -14, 1, 0)
