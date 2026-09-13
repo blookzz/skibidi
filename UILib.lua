@@ -2157,7 +2157,7 @@ function UILib.CreatePanel(Options)
 	-- ── Tab bar (optional) ─────────────────────────────────
 	-- "top"  — horizontal bar of equal-width buttons under the header
 	-- "left" — vertical rail of full-width buttons beside the content
-	local TabBar, TabBtns, TabUnderline, TabInd
+	local TabBar, TabBtns, TabUnderline, TabInd, TabRail
 	local tabGrads = {}
 	local tabIcons = {}   -- index -> ImageLabel (only tabs that have one)
 	local TAB_ICON = 14
@@ -2239,14 +2239,59 @@ function UILib.CreatePanel(Options)
 	elseif sideTabs then
 		-- Vertical tab rail on a slightly darker strip so it reads as
 		-- navigation, separated from content by a 1px divider.
+		--
+		-- The rail reaches the panel's bottom-left corner, and Frame's
+		-- ClipsDescendants is a rectangular scissor that ignores Frame's
+		-- UICorner, so a plain square rail drew a square corner over the
+		-- panel's rounded one. UICorner can't round just one corner, so the
+		-- backdrop is two non-overlapping pieces: a square upper block, and a
+		-- bottom strip whose rounded fill is oversized upward and rightward
+		-- inside a clipping wrapper so only its bottom-left curve survives.
+		-- No overlap means the 0.35 transparency never doubles at the seam.
+		-- The rail's own background is off; TabBar (the list layout) is a
+		-- transparent child so the backdrop pieces stay out of the layout.
+		local RAIL_R = Theme.CornerRadius
+		TabRail = Instance.new("Frame")
+		TabRail.Position               = UDim2.new(0, 0, 0, HEADER_H)
+		TabRail.Size                   = UDim2.new(0, RAIL_W, 1, -HEADER_H)
+		TabRail.BackgroundTransparency = 1
+		TabRail.BorderSizePixel        = 0
+		TabRail.ZIndex                 = 2
+		TabRail.Parent                 = Frame
+
+		local RailTop = Instance.new("Frame")
+		RailTop.Size                   = UDim2.new(1, 0, 1, -RAIL_R)
+		RailTop.BackgroundColor3       = Theme.Bg0
+		RailTop.BackgroundTransparency = 0.35
+		RailTop.BorderSizePixel        = 0
+		RailTop.ZIndex                 = 2
+		RailTop.Parent                 = TabRail
+
+		local RailBottomClip = Instance.new("Frame")
+		RailBottomClip.Position               = UDim2.new(0, 0, 1, -RAIL_R)
+		RailBottomClip.Size                   = UDim2.new(1, 0, 0, RAIL_R)
+		RailBottomClip.BackgroundTransparency = 1
+		RailBottomClip.BorderSizePixel        = 0
+		RailBottomClip.ClipsDescendants       = true
+		RailBottomClip.ZIndex                 = 2
+		RailBottomClip.Parent                 = TabRail
+
+		local RailBottom = Instance.new("Frame")
+		RailBottom.Position               = UDim2.new(0, 0, 0, -RAIL_R)
+		RailBottom.Size                   = UDim2.new(1, RAIL_R, 0, 2 * RAIL_R)
+		RailBottom.BackgroundColor3       = Theme.Bg0
+		RailBottom.BackgroundTransparency = 0.35
+		RailBottom.BorderSizePixel        = 0
+		RailBottom.ZIndex                 = 2
+		RailBottom.Parent                 = RailBottomClip
+		MakeCorner(RailBottom, UDim.new(0, RAIL_R))
+
 		TabBar = Instance.new("Frame")
-		TabBar.Position               = UDim2.new(0, 0, 0, HEADER_H)
-		TabBar.Size                   = UDim2.new(0, RAIL_W, 1, -HEADER_H)
-		TabBar.BackgroundColor3       = Theme.Bg0
-		TabBar.BackgroundTransparency = 0.35
+		TabBar.Size                   = UDim2.new(1, 0, 1, 0)
+		TabBar.BackgroundTransparency = 1
 		TabBar.BorderSizePixel        = 0
 		TabBar.ZIndex                 = 2
-		TabBar.Parent                 = Frame
+		TabBar.Parent                 = TabRail
 		MakePadding(TabBar, 6, 6, SIDE_TAB_TOP, SIDE_TAB_TOP)
 		MakeListLayout(TabBar, Enum.FillDirection.Vertical, SIDE_TAB_GAP)
 
@@ -2501,6 +2546,7 @@ function UILib.CreatePanel(Options)
 	local SetSearchOpen = function() end
 
 	local function setBodyVisible(visible)
+		if TabRail      then TabRail.Visible      = visible end
 		if TabBar       then TabBar.Visible       = visible end
 		if TabUnderline then TabUnderline.Visible = visible end
 		if TabInd       then TabInd.Visible       = visible end
