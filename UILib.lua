@@ -1,10 +1,13 @@
 -- ============================================================
--- UILib.lua  |  Self-contained loadstring library
+-- Skibidi UI  |  Self-contained loadstring library (skibidi edition)
 -- Usage:
--- local UILib = loadstring(game:HttpGet("https://raw.githubusercontent.com/blookzz/skibidi/refs/heads/main/UILib.lua"))()
+-- local Skibidi = loadstring(game:HttpGet("https://raw.githubusercontent.com/blookzz/skibidi/refs/heads/main/UILib.lua"))()
 -- ============================================================
 
-local UILib = {}
+local Skibidi = {}
+Skibidi.Brand   = "skibidi"
+Skibidi.Name    = "Skibidi UI"
+Skibidi.Version = "skibidi-2.2.0"
 
 -- ============================================================
 -- SERVICES
@@ -22,7 +25,7 @@ local PlayerGui        = LocalPlayer:WaitForChild("PlayerGui")
 -- ============================================================
 -- THEME  (matches the gold/dark reference style by default)
 -- Override any key before calling Create functions:
---   UILib.Theme.Accent = Color3.fromRGB(120, 80, 220)
+--   Skibidi.Theme.Accent = Color3.fromRGB(120, 80, 220)
 -- ============================================================
 local Theme = {
 	-- Surfaces
@@ -116,12 +119,12 @@ local Theme = {
 	RippleAsset      = "rbxassetid://266543268",
 	SpinnerAsset     = "rbxassetid://4965945816",
 }
-UILib.Theme = Theme
+Skibidi.Theme = Theme
 
 -- ============================================================
 -- THEME PRESETS
--- UILib.SetTheme("neon")            -- swap the whole palette
--- UILib.SetTheme({ Accent = ... })  -- or merge in your own keys
+-- Skibidi.SetTheme("neon")            -- swap the whole palette
+-- Skibidi.SetTheme({ Accent = ... })  -- or merge in your own keys
 --
 -- Themes are read at *construction* time, so call this before you
 -- create any panels. Existing widgets keep the palette they were
@@ -209,9 +212,9 @@ local Presets = {
 		InputBg = Color3.fromRGB(12,12,12),
 	},
 }
-UILib.Presets = Presets
+Skibidi.Presets = Presets
 
-function UILib.SetTheme(nameOrTable)
+function Skibidi.SetTheme(nameOrTable)
 	local src = nameOrTable
 	if type(src) == "string" then src = Presets[src:lower()] end
 	if type(src) ~= "table" then return Theme end
@@ -223,7 +226,7 @@ function UILib.SetTheme(nameOrTable)
 	return Theme
 end
 
-function UILib.GetThemeNames()
+function Skibidi.GetThemeNames()
 	local out = {}
 	for k in pairs(Presets) do out[#out+1] = k end
 	table.sort(out)
@@ -337,7 +340,7 @@ local function ToHex(c)
 		math.floor(c.G * 255 + 0.5),
 		math.floor(c.B * 255 + 0.5))
 end
-UILib.Lighten, UILib.Darken, UILib.Mix, UILib.HueShift = Lighten, Darken, Mix, HueShift
+Skibidi.Lighten, Skibidi.Darken, Skibidi.Mix, Skibidi.HueShift = Lighten, Darken, Mix, HueShift
 
 -- The two endpoints every accent fill uses. Explicit Theme overrides win;
 -- otherwise a subtle hue rotation either side of Accent gives the fill a
@@ -348,7 +351,7 @@ local function AccentPair(accent)
 	local b = Theme.AccentGrad2 or Darken (HueShift(accent, -14), 0.06)
 	return a, b
 end
-UILib.AccentPair = AccentPair
+Skibidi.AccentPair = AccentPair
 
 -- ── Shared animation driver ─────────────────────────────────
 -- One Heartbeat connection drives every rotating gradient in the whole
@@ -509,7 +512,7 @@ local function MakeAccentFill(parent, accent, flow)
 	-- keeping it off `g` means the fill's colour and its highlight can be
 	-- animated independently.
 	local Sheen = Instance.new("Frame")
-	Sheen.Name                   = "Flow"
+	Sheen.Name                   = "SkibidiFlow"
 	Sheen.Size                   = UDim2.new(1, 0, 1, 0)
 	Sheen.BackgroundColor3       = Color3.new(1, 1, 1)
 	Sheen.BorderSizePixel        = 0
@@ -561,7 +564,7 @@ local function MakeGlow(target, color, spread, transparency)
 	spread = spread or 22
 
 	local G = Instance.new("ImageLabel")
-	G.Name                   = "Glow"
+	G.Name                   = "SkibidiGlow"
 	G.BackgroundTransparency = 1
 	G.Image                  = Theme.ShadowAsset
 	G.ImageColor3            = color or Theme.Accent
@@ -636,7 +639,7 @@ local function MakeInnerGlow(target, color, spread, transparency)
 		local inset = (i - 1) * step
 
 		local R = Instance.new("Frame")
-		R.Name                   = "GlowRing"
+		R.Name                   = "SkibidiGlowRing"
 		R.AnchorPoint            = Vector2.new(0.5, 0.5)
 		R.Position               = UDim2.new(0.5, 0, 0.5, 0)
 		R.Size                   = UDim2.new(1, inset * 2, 1, inset * 2)
@@ -688,7 +691,7 @@ end
 local function MakeGrain(parent)
 	if not Theme.Grain then return nil end
 	local N = Instance.new("ImageLabel")
-	N.Name                   = "Grain"
+	N.Name                   = "SkibidiGrain"
 	N.Size                   = UDim2.new(1, 0, 1, 0)
 	N.BackgroundTransparency = 1
 	N.Image                  = Theme.GrainAsset
@@ -708,7 +711,7 @@ local function MakeRipple(button, color, radius)
 	if not Theme.Ripple then return end
 
 	local Host = Instance.new("Frame")
-	Host.Name                   = "RippleHost"
+	Host.Name                   = "SkibidiRippleHost"
 	Host.Size                   = UDim2.new(1, 0, 1, 0)
 	Host.BackgroundTransparency = 1
 	Host.BorderSizePixel        = 0
@@ -769,7 +772,7 @@ local function MakeShine(target, radius, hostParent)
 	if not Theme.Shine then return function() end end
 
 	local Bar = Instance.new("Frame")
-	Bar.Name                   = "Shine"
+	Bar.Name                   = "SkibidiShine"
 	Bar.Size                   = UDim2.new(1, 0, 1, 0)
 	Bar.BackgroundColor3       = Color3.new(1, 1, 1)
 	Bar.BorderSizePixel        = 0
@@ -815,7 +818,7 @@ end
 -- tween loop that stops the moment it's hidden or destroyed.
 local function MakeSpinner(parent, size, color)
 	local S = Instance.new("ImageLabel")
-	S.Name                   = "Spinner"
+	S.Name                   = "SkibidiSpinner"
 	S.AnchorPoint            = Vector2.new(0.5, 0.5)
 	S.Position               = UDim2.new(0.5, 0, 0.5, 0)
 	S.Size                   = UDim2.new(0, size or 18, 0, size or 18)
@@ -985,11 +988,11 @@ end
 -- here so SaveConfig/LoadConfig can persist and restore their values.
 -- Purely opt-in: components without a Flag are never registered.
 local Flags = {}
-UILib.Flags = Flags
+Skibidi.Flags = Flags
 
 -- ── Panel registry ──────────────────────────────────────────
 -- Every ScreenGui the library creates is tracked here so
--- UILib.Unload() can tear the whole UI down in one call.
+-- Skibidi.Unload() can tear the whole UI down in one call.
 local _allGuis = {}
 
 -- ── Tooltip ─────────────────────────────────────────────────
@@ -1001,7 +1004,7 @@ local _tooltipSg, _tooltipFrame, _tooltipLbl
 local function _ensureTooltip()
 	if _tooltipSg and _tooltipSg.Parent then return end
 	_tooltipSg = Instance.new("ScreenGui")
-	_tooltipSg.Name           = "UILibTooltip"
+	_tooltipSg.Name           = "SkibidiTooltip"
 	_tooltipSg.ResetOnSpawn   = false
 	_tooltipSg.DisplayOrder   = 2000
 	_tooltipSg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
@@ -1058,7 +1061,7 @@ local function AttachTooltip(target, text)
 end
 
 -- Default parent used by CreatePanel when Options.Parent is omitted.
--- Overridable in one place via UILib.Init({ Parent = someInstance }).
+-- Overridable in one place via Skibidi.Init({ Parent = someInstance }).
 local DefaultParent = PlayerGui
 
 -- ============================================================
@@ -1118,11 +1121,11 @@ end
 -- created immediately and fills in when the download lands.
 --
 -- Public API:
---   UILib.ResolveIcon(spec)          -> asset id string | nil (sync)
---   UILib.PreloadIcons([pack], [cb]) -> warm the full map up front
---   UILib.AddIcons([pack], {name = id, ...})
---   UILib.CreateIcon(parent, spec, size, color) -> { Label, Set(spec) }
---   UILib.SetIcon(imageLabel, spec)
+--   Skibidi.ResolveIcon(spec)          -> asset id string | nil (sync)
+--   Skibidi.PreloadIcons([pack], [cb]) -> warm the full map up front
+--   Skibidi.AddIcons([pack], {name = id, ...})
+--   Skibidi.CreateIcon(parent, spec, size, color) -> { Label, Set(spec) }
+--   Skibidi.SetIcon(imageLabel, spec)
 -- ============================================================
 local ICON_PACK_URLS = {
 	lucide = "https://raw.githubusercontent.com/Footagesus/Icons/refs/heads/main/lucide/dist/Icons.lua",
@@ -1325,7 +1328,7 @@ local ICON_ALIASES = {
 local iconPackState   = {}   -- pack -> "loading" | "loaded" | "failed"
 local iconPackWaiters = {}   -- pack -> { fn(ok), ... }
 local iconWarned      = {}   -- spec -> true once an "unknown icon" warning fired
-UILib.Icons = IconPacks
+Skibidi.Icons = IconPacks
 
 local function httpGet(url)
 	local ok, res = pcall(function() return game:HttpGet(url) end)
@@ -1361,7 +1364,7 @@ end
 
 -- Synchronous lookup. nil means "not known *yet*" for a lucide name that
 -- is outside the embedded subset and hasn't been downloaded.
-function UILib.ResolveIcon(spec)
+function Skibidi.ResolveIcon(spec)
 	if spec == nil or spec == "" then return nil end
 	if type(spec) == "number" then return "rbxassetid://" .. tostring(spec) end
 	if type(spec) ~= "string" then return nil end
@@ -1405,7 +1408,7 @@ local function loadIconPack(pack, onDone)
 		end
 		iconPackState[pack] = ok and "loaded" or "failed"
 		if not ok then
-			warn(("[UILib] icon pack %q could not be downloaded; only the embedded icons are available"):format(pack))
+			warn(("[Skibidi] icon pack %q could not be downloaded; only the embedded icons are available"):format(pack))
 		end
 		local waiters = iconPackWaiters[pack]
 		iconPackWaiters[pack] = nil
@@ -1415,7 +1418,7 @@ end
 
 -- Downloads the full map now (e.g. at script start) so no icon ever
 -- shows up a beat late. `cb(ok)` is optional.
-function UILib.PreloadIcons(pack, cb)
+function Skibidi.PreloadIcons(pack, cb)
 	if type(pack) == "function" then pack, cb = nil, pack end
 	loadIconPack(pack or DEFAULT_ICON_PACK, cb)
 end
@@ -1423,7 +1426,7 @@ end
 -- Register custom names, WindUI AddIcons style: { name = id, ... }.
 -- The id may be a number, "rbxassetid://…", or a WindUI spritesheet
 -- entry (only its Image is used).
-function UILib.AddIcons(pack, tbl)
+function Skibidi.AddIcons(pack, tbl)
 	if type(pack) == "table" and tbl == nil then pack, tbl = DEFAULT_ICON_PACK, pack end
 	if type(tbl) ~= "table" then return end
 	IconPacks[pack] = IconPacks[pack] or {}
@@ -1443,7 +1446,7 @@ local function SetIconImage(label, spec)
 	if not label then return false end
 	local key = (spec ~= nil and spec ~= "") and tostring(spec) or nil
 	label:SetAttribute("IconSpec", key)
-	local id = UILib.ResolveIcon(spec)
+	local id = Skibidi.ResolveIcon(spec)
 	if id then
 		label.Image = id
 		return true
@@ -1454,7 +1457,7 @@ local function SetIconImage(label, spec)
 	local function unknown()
 		if not iconWarned[spec] then
 			iconWarned[spec] = true
-			warn(("[UILib] unknown icon %q"):format(spec))
+			warn(("[Skibidi] unknown icon %q"):format(spec))
 		end
 	end
 	if iconPackState[pack] == "loaded" or iconPackState[pack] == "failed" then
@@ -1463,7 +1466,7 @@ local function SetIconImage(label, spec)
 	end
 	loadIconPack(pack, function(ok)
 		if label:GetAttribute("IconSpec") ~= key then return end
-		local late = UILib.ResolveIcon(spec)
+		local late = Skibidi.ResolveIcon(spec)
 		if late then
 			label.Image = late
 		elseif ok then
@@ -1472,11 +1475,11 @@ local function SetIconImage(label, spec)
 	end)
 	return false
 end
-UILib.SetIcon = SetIconImage
+Skibidi.SetIcon = SetIconImage
 
 local function MakeIcon(parent, spec, size, color, zindex)
 	local L = Instance.new("ImageLabel")
-	L.Name                   = "Icon"
+	L.Name                   = "SkibidiIcon"
 	L.Size                   = UDim2.new(0, size or 14, 0, size or 14)
 	L.BackgroundTransparency = 1
 	L.BorderSizePixel        = 0
@@ -1489,7 +1492,7 @@ local function MakeIcon(parent, spec, size, color, zindex)
 end
 
 -- Standalone icon for callers building their own layouts.
-function UILib.CreateIcon(Parent, spec, size, color)
+function Skibidi.CreateIcon(Parent, spec, size, color)
 	if type(spec) == "table" then
 		local o = spec
 		spec, size, color = o.Icon, o.Size or size, o.Color or color
@@ -1590,7 +1593,7 @@ end
 -- Creates a draggable panel with optional tab bar.
 --
 -- Options:
---   Name         string    ScreenGui name              (default "Panel")
+--   Name         string    ScreenGui name              (default "SkibidiPanel")
 --   Title        string    Header title text           (default "")
 --   Width        number    Width in pixels             (default 310)
 --   Height       number    Content height in pixels    (default 300)
@@ -1607,10 +1610,6 @@ end
 --                          "left" renders a vertical tab rail instead
 --                          of the horizontal bar under the header
 --   TabWidth     number    Rail width when TabSide="left" (default 96)
---   TabHeight    number    Height of each button on the side rail
---                          when TabSide="left"         (default 28)
---   TabGap       number    Vertical space between side rail buttons
---                          when TabSide="left"         (default 4)
 --   SubTitle     string    Small muted text after the title (optional)
 --   Variant      string    "gold"|"blue"|"green"|"red" (optional)
 --   Minimized    bool      Start minimized             (default false)
@@ -1651,7 +1650,7 @@ end
 --     SearchBtn, ScaleBtn (nil when the option is off)
 --   }
 -- ============================================================
-function UILib.CreatePanel(Options)
+function Skibidi.CreatePanel(Options)
 	Options = Options or {}
 
 	local Width      = Options.Width  or 310
@@ -1704,7 +1703,7 @@ function UILib.CreatePanel(Options)
 
 	-- ── ScreenGui ──────────────────────────────────────────
 	local Gui = Instance.new("ScreenGui")
-	Gui.Name           = Options.Name or "Panel"
+	Gui.Name           = Options.Name or "SkibidiPanel"
 	Gui.ResetOnSpawn   = false
 	Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 	Gui.Parent         = Options.Parent or DefaultParent
@@ -1738,7 +1737,7 @@ function UILib.CreatePanel(Options)
 	local shadowLayers = {}
 	local function makeShadowLayer(pad, alpha, drop)
 		local L = Instance.new("ImageLabel")
-		L.Name                   = "Shadow"
+		L.Name                   = "SkibidiShadow"
 		L.BackgroundTransparency = 1
 		L.Image                  = Theme.ShadowAsset
 		L.ImageColor3            = Color3.new(0, 0, 0)
@@ -1850,7 +1849,7 @@ function UILib.CreatePanel(Options)
 	local TitleIcon
 	if Options.Icon then
 		TitleIcon = MakeIcon(Header, Options.Icon, TITLE_ICON, Theme.AccentSec, 3)
-		TitleIcon.Name        = "TitleIcon"
+		TitleIcon.Name        = "SkibidiTitleIcon"
 		TitleIcon.AnchorPoint = Vector2.new(0, 0.5)
 		TitleIcon.Position    = UDim2.new(0, 11, 0.5, 0)
 		TitlePip.Visible      = false
@@ -2048,7 +2047,7 @@ function UILib.CreatePanel(Options)
 	-- the fallback shown while the download runs or when the executor has
 	-- no writefile/getcustomasset.
 	local DISCORD_ICON_URL  = "https://files.catbox.moe/gvgnul.png"
-	local DISCORD_ICON_FILE = "UILib_discord.png"
+	local DISCORD_ICON_FILE = "skibidi_discord.png"
 	local DISCORD_ICON_ID   = "rbxassetid://94434236999817"
 
 	local DiscordBtn
@@ -2115,7 +2114,7 @@ function UILib.CreatePanel(Options)
 	local SearchBtn, SearchIcon, SearchBox
 	if showSearch then
 		SearchBtn = MakeHeaderChip("", nextChipX())
-		SearchBtn.Name = "Search"
+		SearchBtn.Name = "SkibidiSearch"
 
 		SearchIcon = Instance.new("ImageLabel")
 		SearchIcon.Size                   = UDim2.new(0, 13, 0, 13)
@@ -2130,7 +2129,7 @@ function UILib.CreatePanel(Options)
 		-- The box takes over the title's slot so nothing else in the
 		-- header has to move; it is only visible while search is open.
 		SearchBox = Instance.new("TextBox")
-		SearchBox.Name                   = "SearchBox"
+		SearchBox.Name                   = "SkibidiSearchBox"
 		SearchBox.Size                   = UDim2.new(1, -(reservedRight + TITLE_X), 0, 22)
 		SearchBox.AnchorPoint            = Vector2.new(0, 0.5)
 		SearchBox.Position               = UDim2.new(0, TITLE_X, 0.5, 0)
@@ -2157,17 +2156,12 @@ function UILib.CreatePanel(Options)
 	-- ── Tab bar (optional) ─────────────────────────────────
 	-- "top"  — horizontal bar of equal-width buttons under the header
 	-- "left" — vertical rail of full-width buttons beside the content
-	local TabBar, TabBtns, TabUnderline, TabInd, TabRail
+	local TabBar, TabBtns, TabUnderline, TabInd
 	local tabGrads = {}
 	local tabIcons = {}   -- index -> ImageLabel (only tabs that have one)
 	local TAB_ICON = 14
 	local tabGap, tabW = 6, 0
-	-- Rail button height and gap are per-panel options; the indicator
-	-- position below is derived from the same numbers, so the accent bar
-	-- stays centred on whichever tab is active at any size.
-	local SIDE_TAB_H   = tonumber(Options.TabHeight) or 28
-	local SIDE_TAB_GAP = tonumber(Options.TabGap) or 4
-	local SIDE_TAB_TOP = 8
+	local SIDE_TAB_H, SIDE_TAB_GAP, SIDE_TAB_TOP = 28, 4, 8
 	if hasTabs and not sideTabs then
 		TabBar = Instance.new("Frame")
 		TabBar.Position               = UDim2.new(0, 0, 0, HEADER_H)
@@ -2239,61 +2233,16 @@ function UILib.CreatePanel(Options)
 	elseif sideTabs then
 		-- Vertical tab rail on a slightly darker strip so it reads as
 		-- navigation, separated from content by a 1px divider.
-		--
-		-- The rail reaches the panel's bottom-left corner, and Frame's
-		-- ClipsDescendants is a rectangular scissor that ignores Frame's
-		-- UICorner, so a plain square rail drew a square corner over the
-		-- panel's rounded one. UICorner can't round just one corner, so the
-		-- backdrop is two non-overlapping pieces: a square upper block, and a
-		-- bottom strip whose rounded fill is oversized upward and rightward
-		-- inside a clipping wrapper so only its bottom-left curve survives.
-		-- No overlap means the 0.35 transparency never doubles at the seam.
-		-- The rail's own background is off; TabBar (the list layout) is a
-		-- transparent child so the backdrop pieces stay out of the layout.
-		local RAIL_R = Theme.CornerRadius
-		TabRail = Instance.new("Frame")
-		TabRail.Position               = UDim2.new(0, 0, 0, HEADER_H)
-		TabRail.Size                   = UDim2.new(0, RAIL_W, 1, -HEADER_H)
-		TabRail.BackgroundTransparency = 1
-		TabRail.BorderSizePixel        = 0
-		TabRail.ZIndex                 = 2
-		TabRail.Parent                 = Frame
-
-		local RailTop = Instance.new("Frame")
-		RailTop.Size                   = UDim2.new(1, 0, 1, -RAIL_R)
-		RailTop.BackgroundColor3       = Theme.Bg0
-		RailTop.BackgroundTransparency = 0.35
-		RailTop.BorderSizePixel        = 0
-		RailTop.ZIndex                 = 2
-		RailTop.Parent                 = TabRail
-
-		local RailBottomClip = Instance.new("Frame")
-		RailBottomClip.Position               = UDim2.new(0, 0, 1, -RAIL_R)
-		RailBottomClip.Size                   = UDim2.new(1, 0, 0, RAIL_R)
-		RailBottomClip.BackgroundTransparency = 1
-		RailBottomClip.BorderSizePixel        = 0
-		RailBottomClip.ClipsDescendants       = true
-		RailBottomClip.ZIndex                 = 2
-		RailBottomClip.Parent                 = TabRail
-
-		local RailBottom = Instance.new("Frame")
-		RailBottom.Position               = UDim2.new(0, 0, 0, -RAIL_R)
-		RailBottom.Size                   = UDim2.new(1, RAIL_R, 0, 2 * RAIL_R)
-		RailBottom.BackgroundColor3       = Theme.Bg0
-		RailBottom.BackgroundTransparency = 0.35
-		RailBottom.BorderSizePixel        = 0
-		RailBottom.ZIndex                 = 2
-		RailBottom.Parent                 = RailBottomClip
-		MakeCorner(RailBottom, UDim.new(0, RAIL_R))
-
 		TabBar = Instance.new("Frame")
-		TabBar.Size                   = UDim2.new(1, 0, 1, 0)
-		TabBar.BackgroundTransparency = 1
+		TabBar.Position               = UDim2.new(0, 0, 0, HEADER_H)
+		TabBar.Size                   = UDim2.new(0, RAIL_W, 1, -HEADER_H)
+		TabBar.BackgroundColor3       = Theme.Bg0
+		TabBar.BackgroundTransparency = 0.35
 		TabBar.BorderSizePixel        = 0
 		TabBar.ZIndex                 = 2
-		TabBar.Parent                 = TabRail
-		MakePadding(TabBar, 6, 6, SIDE_TAB_TOP, SIDE_TAB_TOP)
-		MakeListLayout(TabBar, Enum.FillDirection.Vertical, SIDE_TAB_GAP)
+		TabBar.Parent                 = Frame
+		MakePadding(TabBar, 6, 6, 8, 8)
+		MakeListLayout(TabBar, Enum.FillDirection.Vertical, 4)
 
 		-- Vertical divider between the rail and the content area
 		-- (kept in TabUnderline so minimize/restore hides it too)
@@ -2309,7 +2258,7 @@ function UILib.CreatePanel(Options)
 		TabBtns = {}
 		for i, name in ipairs(Tabs) do
 			local btn = Instance.new("TextButton")
-			btn.Size              = UDim2.new(1, 0, 0, SIDE_TAB_H)
+			btn.Size              = UDim2.new(1, 0, 0, 28)
 			btn.LayoutOrder       = i
 			btn.BackgroundColor3  = Theme.Bg2
 			btn.BorderSizePixel   = 0
@@ -2334,8 +2283,7 @@ function UILib.CreatePanel(Options)
 
 		TabInd = Instance.new("Frame")
 		TabInd.Size             = UDim2.new(0, 3, 0, 16)
-		TabInd.Position         = UDim2.new(0, 2, 0,
-			HEADER_H + SIDE_TAB_TOP + math.floor((SIDE_TAB_H - 16) / 2))
+		TabInd.Position         = UDim2.new(0, 2, 0, HEADER_H + SIDE_TAB_TOP + 6)
 		TabInd.BackgroundColor3 = Accent
 		TabInd.BorderSizePixel  = 0
 		TabInd.ZIndex           = 4
@@ -2546,7 +2494,6 @@ function UILib.CreatePanel(Options)
 	local SetSearchOpen = function() end
 
 	local function setBodyVisible(visible)
-		if TabRail      then TabRail.Visible      = visible end
 		if TabBar       then TabBar.Visible       = visible end
 		if TabUnderline then TabUnderline.Visible = visible end
 		if TabInd       then TabInd.Visible       = visible end
@@ -2796,7 +2743,7 @@ function UILib.CreatePanel(Options)
 
 	if showScaler then
 		ScaleBtn = Instance.new("ImageButton")
-		ScaleBtn.Name                   = "ResizeGrip"
+		ScaleBtn.Name                   = "SkibidiResizeGrip"
 		ScaleBtn.Size                   = UDim2.new(0, 16, 0, 16)
 		ScaleBtn.AnchorPoint            = Vector2.new(1, 1)
 		ScaleBtn.Position               = UDim2.new(1, -5, 1, -5)
@@ -2933,7 +2880,7 @@ function UILib.CreatePanel(Options)
 		else
 			if not TitleIcon then
 				TitleIcon = MakeIcon(Header, spec, TITLE_ICON, Theme.AccentSec, 3)
-				TitleIcon.Name        = "TitleIcon"
+				TitleIcon.Name        = "SkibidiTitleIcon"
 				TitleIcon.AnchorPoint = Vector2.new(0, 0.5)
 				TitleIcon.Position    = UDim2.new(0, 11, 0.5, 0)
 			else
@@ -3026,7 +2973,7 @@ end
 -- Returns:
 --   { Frame, Content, SetOpen(bool), IsOpen(), SetTitle(text), SetIcon(spec) }
 -- ============================================================
-function UILib.CreateSection(Parent, Options)
+function Skibidi.CreateSection(Parent, Options)
 	Options = Options or {}
 	local title    = Options.Title or ""
 	local startOpen = Options.Open == true  -- default false
@@ -3188,7 +3135,7 @@ end
 --
 -- Returns: { Frame, Button, SetText(text), SetDisabled(bool), SetIcon(spec) }
 -- ============================================================
-function UILib.CreateButton(Parent, Options)
+function Skibidi.CreateButton(Parent, Options)
 	Options = Options or {}
 
 	local RowBg = Instance.new("Frame")
@@ -3379,7 +3326,7 @@ end
 --   Icon         string   Lucide icon before the label (optional)
 -- Returns: { Frame, Set(bool), GetValue(), SetDisabled(bool) }
 -- ============================================================
-function UILib.CreateToggle(Parent, Options)
+function Skibidi.CreateToggle(Parent, Options)
 	Options = Options or {}
 	local state = Options.Default == true
 
@@ -3541,7 +3488,7 @@ end
 --   Icon         string   Lucide icon before the label (optional)
 -- Returns: { Frame, TextBox, GetValue() }
 -- ============================================================
-function UILib.CreateTextInput(Parent, Options)
+function Skibidi.CreateTextInput(Parent, Options)
 	Options = Options or {}
 	local boxW = Options.Width or 60
 
@@ -3659,7 +3606,7 @@ end
 --   Icon       string   Lucide icon before the label (optional)
 -- Returns: { Frame, Update(value), GetValue() }
 -- ============================================================
-function UILib.CreateSlider(Parent, Options)
+function Skibidi.CreateSlider(Parent, Options)
 	Options = Options or {}
 	local Min   = Options.Min     or 0
 	local Max   = Options.Max     or 100
@@ -3823,7 +3770,7 @@ end
 -- Returns:
 --   { Frame, GetValues(), SetValue(i, text) }
 -- ============================================================
-function UILib.CreateInputList(Parent, Options)
+function Skibidi.CreateInputList(Parent, Options)
 	Options = Options or {}
 	local count  = Options.Count    or 10
 	local h      = Options.Height   or 120
@@ -3988,7 +3935,7 @@ end
 --   { Frame, Log(msg, color?), Clear() }
 --   Log's optional color tints that entry (e.g. red for errors).
 -- ============================================================
-function UILib.CreateStatusLog(Parent, Options)
+function Skibidi.CreateStatusLog(Parent, Options)
 	Options = Options or {}
 	local h = Options.Height or 200
 
@@ -4111,7 +4058,7 @@ end
 --
 -- Returns the divider Frame.
 -- ============================================================
-function UILib.CreateDivider(Parent, Options)
+function Skibidi.CreateDivider(Parent, Options)
 	Options = Options or {}
 
 	-- A rule that stops dead at both edges boxes the content in. Fading
@@ -4189,7 +4136,7 @@ local NOTIF_PAD  = 8
 local function _ensureNotifGui()
 	if _notifSg and _notifSg.Parent then return end
 	_notifSg = Instance.new("ScreenGui")
-	_notifSg.Name           = "UILibNotifs"
+	_notifSg.Name           = "SkibidiNotifs"
 	_notifSg.ResetOnSpawn   = false
 	_notifSg.DisplayOrder   = 999
 	_notifSg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
@@ -4223,7 +4170,7 @@ local NOTIF_KINDS = {
 	danger  = { "circle-x",       "Danger"  },
 	info    = { "info",           "Info"    },
 }
-function UILib.ShowNotification(Title, Text, Duration, Icon)
+function Skibidi.ShowNotification(Title, Text, Duration, Icon)
 	_ensureNotifGui()
 
 	if type(Title) == "table" then
@@ -4345,7 +4292,7 @@ end
 --   ClampToScreen  bool   Keep Target inside its parent container
 --                         while dragging (default false)
 -- ============================================================
-function UILib.MakeDraggable(Handle, Target, Options)
+function Skibidi.MakeDraggable(Handle, Target, Options)
 	Options = Options or {}
 	local clampToScreen = Options.ClampToScreen == true
 	local dragging, dragStart, startPos = false, nil, nil
@@ -4393,7 +4340,7 @@ end
 --
 -- Returns: { Frame, SetTitle(text), SetText(text), SetIcon(spec) }
 -- ============================================================
-function UILib.CreateParagraph(Parent, Options)
+function Skibidi.CreateParagraph(Parent, Options)
 	Options = Options or {}
 
 	local Card = Instance.new("Frame")
@@ -4483,7 +4430,7 @@ end
 --
 -- Returns: { Frame, Update(value, instant), GetValue() }
 -- ============================================================
-function UILib.CreateProgressBar(Parent, Options)
+function Skibidi.CreateProgressBar(Parent, Options)
 	Options = Options or {}
 	local Min = Options.Min or 0
 	local Max = Options.Max or 100
@@ -4577,7 +4524,7 @@ end
 --   Height   number   (default 8) — used when the parent stacks vertically
 --   Width    number   (default 8) — used when the parent stacks horizontally
 -- ============================================================
-function UILib.CreateSpace(Parent, Options)
+function Skibidi.CreateSpace(Parent, Options)
 	Options = Options or {}
 	local Spacer = Instance.new("Frame")
 	Spacer.Size                   = UDim2.new(0, Options.Width or 0, 0, Options.Height or 8)
@@ -4605,7 +4552,7 @@ end
 --
 -- Returns: { Frame }
 -- ============================================================
-function UILib.CreateHStack(Parent, Options)
+function Skibidi.CreateHStack(Parent, Options)
 	Options = Options or {}
 	local gap = Options.Spacing or 6
 
@@ -4646,7 +4593,7 @@ function UILib.CreateHStack(Parent, Options)
 	return { Frame = Stack }
 end
 
-function UILib.CreateVStack(Parent, Options)
+function Skibidi.CreateVStack(Parent, Options)
 	Options = Options or {}
 	local Stack = Instance.new("Frame")
 	Stack.Size                   = UDim2.new(1, 0, 0, 0)
@@ -4674,7 +4621,7 @@ end
 --
 -- Returns: { Frame, SetValue(index), GetValue() }
 -- ============================================================
-function UILib.CreateGroup(Parent, Options)
+function Skibidi.CreateGroup(Parent, Options)
 	Options = Options or {}
 	local items   = Options.Options or {}
 	local current = Options.Default or 1
@@ -4845,7 +4792,7 @@ end
 -- Returns: { Frame, SetOpen(bool), GetValue(),
 --            SetItems(items, keepSelection) }
 -- ============================================================
-function UILib.CreateDropdown(Parent, Options)
+function Skibidi.CreateDropdown(Parent, Options)
 	Options = Options or {}
 	local items = Options.Options or {}
 	local multi = Options.Multi == true
@@ -5175,7 +5122,7 @@ end
 --   Icon       string   Lucide icon before the label (optional)
 -- Returns: { Frame, Set(keyCode), GetValue() }
 -- ============================================================
-function UILib.CreateKeybind(Parent, Options)
+function Skibidi.CreateKeybind(Parent, Options)
 	Options = Options or {}
 	local current = Options.Default
 	if type(current) == "string" then
@@ -5295,7 +5242,7 @@ end
 --
 -- Returns: { Frame, SetText(text) }
 -- ============================================================
-function UILib.CreateCode(Parent, Options)
+function Skibidi.CreateCode(Parent, Options)
 	Options = Options or {}
 	local fixedH = Options.Height
 
@@ -5414,7 +5361,7 @@ end
 --
 -- Returns: { Frame, Image, SetImage(id) }
 -- ============================================================
-function UILib.CreateImage(Parent, Options)
+function Skibidi.CreateImage(Parent, Options)
 	Options = Options or {}
 	local h = Options.Height or 150
 
@@ -5454,7 +5401,7 @@ end
 --
 -- Returns: { Frame, Video, Play(), Pause() }
 -- ============================================================
-function UILib.CreateVideo(Parent, Options)
+function Skibidi.CreateVideo(Parent, Options)
 	Options = Options or {}
 	local h = Options.Height or 180
 
@@ -5523,7 +5470,7 @@ end
 --
 -- Returns: { Frame, Viewport, Camera, SetModel(instance) }
 -- ============================================================
-function UILib.CreateViewport(Parent, Options)
+function Skibidi.CreateViewport(Parent, Options)
 	Options = Options or {}
 	local h = Options.Height or 180
 
@@ -5600,7 +5547,7 @@ end
 --   Icon       string   Lucide icon before the label (optional)
 -- Returns: { Frame, SetOpen(bool), SetValue(color3), GetValue() }
 -- ============================================================
-function UILib.CreateColorPicker(Parent, Options)
+function Skibidi.CreateColorPicker(Parent, Options)
 	Options = Options or {}
 	local current = Options.Default or Color3.fromRGB(255, 255, 255)
 	local h, s, v = Color3.toHSV(current)
@@ -5853,16 +5800,16 @@ end
 -- Init
 -- Optional bootstrap call. Lets you override theme values and
 -- set a default Parent for future CreatePanel calls in one go,
--- without having to reach into UILib.Theme directly.
+-- without having to reach into Skibidi.Theme directly.
 --
 -- Options:
---   Theme    table      Partial theme override, merged into UILib.Theme
+--   Theme    table      Partial theme override, merged into Skibidi.Theme
 --   Parent   Instance   Default parent for new panels (default PlayerGui)
 --
--- Returns: UILib (so calls can be chained, e.g.
---   UILib.Init({ Theme = { Accent = Color3.fromRGB(120,80,220) } }).CreatePanel({...})
+-- Returns: Skibidi (so calls can be chained, e.g.
+--   Skibidi.Init({ Theme = { Accent = Color3.fromRGB(120,80,220) } }).CreatePanel({...})
 -- ============================================================
-function UILib.Init(Options)
+function Skibidi.Init(Options)
 	Options = Options or {}
 	if Options.Theme then
 		for k, val in pairs(Options.Theme) do
@@ -5872,7 +5819,7 @@ function UILib.Init(Options)
 	if Options.Parent then
 		DefaultParent = Options.Parent
 	end
-	return UILib
+	return Skibidi
 end
 
 -- ============================================================
@@ -5884,13 +5831,13 @@ end
 -- are completely unaffected.
 --
 -- To opt a component in, give it a Flag key at creation:
---   UILib.CreateToggle(tab, { Label = "ESP", Flag = "esp", ... })
+--   Skibidi.CreateToggle(tab, { Label = "ESP", Flag = "esp", ... })
 -- Supported: Toggle (bool), Slider (number), TextInput (string),
 -- Dropdown (string / array if Multi), Keybind (key name string),
 -- ColorPicker (RGB table), Group (index), InputList (array).
 --
---   UILib.SaveConfig(name)  → true  |  false, err
---   UILib.LoadConfig(name)  → true  |  false, err
+--   Skibidi.SaveConfig(name)  → true  |  false, err
+--   Skibidi.LoadConfig(name)  → true  |  false, err
 --
 -- `name` defaults to "UILibConfig"; files are stored as
 -- "<name>.json" in the executor's workspace folder. Loading
@@ -5901,7 +5848,7 @@ local function configFileName(name)
 	return tostring(name or "UILibConfig") .. ".json"
 end
 
-function UILib.SaveConfig(name)
+function Skibidi.SaveConfig(name)
 	if type(writefile) ~= "function" then
 		return false, "writefile is not supported by this executor"
 	end
@@ -5926,7 +5873,7 @@ function UILib.SaveConfig(name)
 	return true
 end
 
-function UILib.LoadConfig(name)
+function Skibidi.LoadConfig(name)
 	if type(readfile) ~= "function" then
 		return false, "readfile is not supported by this executor"
 	end
@@ -5968,7 +5915,7 @@ end
 --
 -- Returns: { Frame, Label, SetText(text) }
 -- ============================================================
-function UILib.CreateLabel(Parent, Options)
+function Skibidi.CreateLabel(Parent, Options)
 	Options = Options or {}
 
 	local Lbl = Instance.new("TextLabel")
@@ -6004,7 +5951,7 @@ end
 --   Icon       string   Lucide icon before the label (optional)
 -- Returns: { Frame, SetValue(v), SetLabel(t), GetValue() }
 -- ============================================================
-function UILib.CreateKeyValue(Parent, Options)
+function Skibidi.CreateKeyValue(Parent, Options)
 	Options = Options or {}
 	local value = Options.Value ~= nil and tostring(Options.Value) or "-"
 
@@ -6087,7 +6034,7 @@ end
 -- Destroys every panel, notification and tooltip the library has
 -- created and clears internal state. Safe to call multiple times.
 -- ============================================================
-function UILib.Unload()
+function Skibidi.Unload()
 	for _, g in ipairs(_allGuis) do
 		if g and g.Parent then g:Destroy() end
 	end
@@ -6107,31 +6054,31 @@ end
 -- primary CreateXxx API, without altering how the components
 -- themselves are implemented.
 -- ============================================================
-UILib.init        = UILib.Init
-UILib.unload      = UILib.Unload
-UILib.saveconfig  = UILib.SaveConfig
-UILib.loadconfig  = UILib.LoadConfig
-UILib.notify      = UILib.ShowNotification
-UILib.label       = UILib.CreateLabel
-UILib.keyvalue    = UILib.CreateKeyValue
-UILib.button      = UILib.CreateButton
-UILib.code        = UILib.CreateCode
-UILib.colorpicker = UILib.CreateColorPicker
-UILib.divider     = UILib.CreateDivider
-UILib.dropdown    = UILib.CreateDropdown
-UILib.group       = UILib.CreateGroup
-UILib.hstack      = UILib.CreateHStack
-UILib.image       = UILib.CreateImage
-UILib.input       = UILib.CreateTextInput
-UILib.keybind     = UILib.CreateKeybind
-UILib.paragraph   = UILib.CreateParagraph
-UILib.progressbar = UILib.CreateProgressBar
-UILib.section     = UILib.CreateSection
-UILib.slider      = UILib.CreateSlider
-UILib.space       = UILib.CreateSpace
-UILib.toggle      = UILib.CreateToggle
-UILib.vstack      = UILib.CreateVStack
-UILib.video       = UILib.CreateVideo
-UILib.viewport    = UILib.CreateViewport
+Skibidi.init        = Skibidi.Init
+Skibidi.unload      = Skibidi.Unload
+Skibidi.saveconfig  = Skibidi.SaveConfig
+Skibidi.loadconfig  = Skibidi.LoadConfig
+Skibidi.notify      = Skibidi.ShowNotification
+Skibidi.label       = Skibidi.CreateLabel
+Skibidi.keyvalue    = Skibidi.CreateKeyValue
+Skibidi.button      = Skibidi.CreateButton
+Skibidi.code        = Skibidi.CreateCode
+Skibidi.colorpicker = Skibidi.CreateColorPicker
+Skibidi.divider     = Skibidi.CreateDivider
+Skibidi.dropdown    = Skibidi.CreateDropdown
+Skibidi.group       = Skibidi.CreateGroup
+Skibidi.hstack      = Skibidi.CreateHStack
+Skibidi.image       = Skibidi.CreateImage
+Skibidi.input       = Skibidi.CreateTextInput
+Skibidi.keybind     = Skibidi.CreateKeybind
+Skibidi.paragraph   = Skibidi.CreateParagraph
+Skibidi.progressbar = Skibidi.CreateProgressBar
+Skibidi.section     = Skibidi.CreateSection
+Skibidi.slider      = Skibidi.CreateSlider
+Skibidi.space       = Skibidi.CreateSpace
+Skibidi.toggle      = Skibidi.CreateToggle
+Skibidi.vstack      = Skibidi.CreateVStack
+Skibidi.video       = Skibidi.CreateVideo
+Skibidi.viewport    = Skibidi.CreateViewport
 
-return UILib
+return Skibidi
