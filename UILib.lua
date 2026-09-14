@@ -2860,55 +2860,64 @@ function Skibidi.CreatePanel(Options)
 		end)
 	end
 
-	-- "Are you sure?" dialog. A dimmer covers the whole screen (and eats
-	-- clicks meant for the panel) while a small card pops in over the
-	-- window. Escape / clicking the dimmer cancels, Return confirms.
+	-- "Are you sure?" dialog. A dimmer covers just the panel (mirroring
+	-- its position, size and corner radius, and eating clicks meant for
+	-- it) while a small card pops in over the middle. Escape / clicking
+	-- the dimmer cancels, Return confirms.
 	local confirmOpen = false
 	local function ConfirmClose()
 		if closing or confirmOpen then return end
 		confirmOpen = true
 
+		-- The dimmer is a sibling of the panel (not a child) so a card
+		-- taller than a minimized panel can still hang past its edges.
 		local Dim = Instance.new("Frame")
 		Dim.Name                   = "SkibidiCloseDim"
-		Dim.Size                   = UDim2.new(1, 0, 1, 0)
+		Dim.Position               = Frame.Position
+		Dim.Size                   = Frame.Size
 		Dim.BackgroundColor3       = Color3.new(0, 0, 0)
 		Dim.BackgroundTransparency = 1
 		Dim.BorderSizePixel        = 0
 		Dim.Active                 = true
 		Dim.ZIndex                 = 100
 		Dim.Parent                 = Gui
+		MakeCorner(Dim, UDim.new(0, Theme.CornerRadius))
+		local dimPosConn = Frame:GetPropertyChangedSignal("Position"):Connect(function()
+			Dim.Position = Frame.Position
+		end)
+		local dimSizeConn = Frame:GetPropertyChangedSignal("Size"):Connect(function()
+			Dim.Size = Frame.Size
+		end)
 
+		-- Holder carries the anchor and the pop scale so the card itself
+		-- (and the glow MakeGlow hangs off it) can stay top-left anchored.
 		local CARD_W, CARD_H = 250, 118
+		local Holder = Instance.new("Frame")
+		Holder.Size                   = UDim2.new(0, CARD_W, 0, CARD_H)
+		Holder.AnchorPoint            = Vector2.new(0.5, 0.5)
+		Holder.Position               = UDim2.new(0.5, 0, 0.5, 0)
+		Holder.BackgroundTransparency = 1
+		Holder.ZIndex                 = 100
+		Holder.Parent                 = Dim
+
+		local CardScale = Instance.new("UIScale")
+		CardScale.Scale  = 0.82
+		CardScale.Parent = Holder
+
 		local Card = Instance.new("Frame")
-		Card.Size                   = UDim2.new(0, CARD_W, 0, CARD_H)
-		Card.AnchorPoint            = Vector2.new(0.5, 0.5)
+		Card.Size                   = UDim2.new(1, 0, 1, 0)
 		Card.BackgroundColor3       = Theme.Bg1
 		Card.BackgroundTransparency = 0.02
 		Card.BorderSizePixel        = 0
 		Card.Active                 = true
 		Card.ZIndex                 = 101
-		Card.Parent                 = Dim
+		Card.Parent                 = Holder
 		MakeCorner(Card, UDim.new(0, Theme.CornerRadius))
 		MakeEdge(Card, Theme.Danger, 1.2, 0.35)
 		MakeGloss(Card, 0.14)
 		MakeGrain(Card)
-		local CardGlow = MakeGlow(Card, Theme.Danger, 22, 0.82)
+		local CardGlow = MakeGlow(Card, Theme.Danger, 14, 0.84)
 		if CardGlow then CardGlow.ZIndex = 100 end
-
-		-- Centre the card on the panel, clamped so it never leaves the screen.
-		do
-			local fp, fs = Frame.AbsolutePosition, Frame.AbsoluteSize
-			local dp, ds = Dim.AbsolutePosition, Dim.AbsoluteSize
-			local cx = fp.X - dp.X + fs.X / 2
-			local cy = fp.Y - dp.Y + fs.Y / 2
-			cx = math.clamp(cx, CARD_W / 2 + 8, math.max(ds.X - CARD_W / 2 - 8, CARD_W / 2 + 8))
-			cy = math.clamp(cy, CARD_H / 2 + 8, math.max(ds.Y - CARD_H / 2 - 8, CARD_H / 2 + 8))
-			Card.Position = UDim2.new(0, cx, 0, cy)
-		end
-
-		local CardScale = Instance.new("UIScale")
-		CardScale.Scale  = 0.82
-		CardScale.Parent = Card
 
 		local Title = Instance.new("TextLabel")
 		Title.Size                   = UDim2.new(1, -28, 0, 18)
@@ -2991,6 +3000,8 @@ function Skibidi.CreatePanel(Options)
 			if not confirmOpen then return end
 			confirmOpen = false
 			if keyConn then keyConn:Disconnect(); keyConn = nil end
+			dimPosConn:Disconnect()
+			dimSizeConn:Disconnect()
 			TweenService:Create(Dim, TweenDlgOut, { BackgroundTransparency = 1 }):Play()
 			TweenService:Create(CardScale, TweenDlgOut, { Scale = 0.88 }):Play()
 			FadeTo(fade, 1, TweenDlgOut)
