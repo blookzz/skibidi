@@ -1630,6 +1630,10 @@ end
 --                          (default half the panel's initial size)
 --   MaxSize      Vector2 | {w, h}   Largest size the grip allows
 --                          (default double the panel's initial size)
+--   ConfirmClose bool      Close chip asks "are you sure?" before
+--                          closing                     (default true)
+--   CloseTitle   string    Dialog heading   (default "Close panel?")
+--   CloseMessage string    Dialog body text (optional)
 --   MinWidth / MinHeight / MaxWidth / MaxHeight   number
 --                          Per-axis overrides of the two above
 --
@@ -1644,7 +1648,7 @@ end
 --     GetTabButton(index), SetTitle(text), SetSubTitle(text),
 --     SetIcon(spec), SetTabIcon(index, spec), GetTabIcon(index),
 --     SetVisible(bool), ToggleVisible(), IsVisible(),
---     SetMinimized(bool), IsMinimized(), Close(),
+--     SetMinimized(bool), IsMinimized(), Close(), ConfirmClose(),
 --     SetSearchOpen(bool), IsSearchOpen(), SetSearch(text),
 --     SetSize(w, h), GetSize(),
 --     SearchBtn, ScaleBtn (nil when the option is off)
@@ -2793,11 +2797,232 @@ function Skibidi.CreatePanel(Options)
 		end)
 	end
 
-	local function CloseWindow()
-		if Gui then Gui:Destroy() end
+	-- ── Closing ────────────────────────────────────────────
+	-- Fade helpers: every transparency-bearing descendant remembers its
+	-- resting value so the whole tree can be faded out (t = 1) and back
+	-- in (t = 0) without a per-element special case.
+	local function CollectFade(root, extra)
+		local list = {}
+		local function add(o)
+			if o:IsA("UIStroke") then
+				list[#list+1] = { o, "Transparency", o.Transparency }
+			elseif o:IsA("GuiObject") then
+				list[#list+1] = { o, "BackgroundTransparency", o.BackgroundTransparency }
+				if o:IsA("TextLabel") or o:IsA("TextButton") or o:IsA("TextBox") then
+					list[#list+1] = { o, "TextTransparency", o.TextTransparency }
+				end
+				if o:IsA("ImageLabel") or o:IsA("ImageButton") then
+					list[#list+1] = { o, "ImageTransparency", o.ImageTransparency }
+				end
+				if o:IsA("ScrollingFrame") then
+					list[#list+1] = { o, "ScrollBarImageTransparency", o.ScrollBarImageTransparency }
+				end
+			end
+		end
+		add(root)
+		for _, d in ipairs(root:GetDescendants()) do add(d) end
+		for _, o in ipairs(extra or {}) do add(o) end
+		return list
+	end
+	local function FadeTo(list, t, info)
+		for _, e in ipairs(list) do
+			local obj, prop, rest = e[1], e[2], e[3]
+			local v = rest + (1 - rest) * t
+			if info then
+				TweenService:Create(obj, info, { [prop] = v }):Play()
+			else
+				obj[prop] = v
+			end
+		end
 	end
 
-	CloseBtn.MouseButton1Click:Connect(CloseWindow)
+	local TweenCloseOut = TweenInfo.new(0.26, Enum.EasingStyle.Back,  Enum.EasingDirection.In)
+	local TweenFadeOut  = TweenInfo.new(0.22, Enum.EasingStyle.Quad,  Enum.EasingDirection.In)
+	local TweenDlgOut   = TweenInfo.new(0.16, Enum.EasingStyle.Quad,  Enum.EasingDirection.In)
+
+	local closing = false
+	-- Shrinks the panel back the way it arrived, fades everything (shadow
+	-- and bloom included) and only then destroys the ScreenGui.
+	local function CloseWindow()
+		if closing or not Gui or not Gui.Parent then return end
+		closing = true
+		local extra = {}
+		for _, L in ipairs(shadowLayers) do extra[#extra+1] = L.Obj end
+		if Bloom then extra[#extra+1] = Bloom end
+		local fade = CollectFade(Frame, extra)
+		FadeTo(fade, 1, TweenFadeOut)
+		TweenService:Create(OpenScale, TweenCloseOut, { Scale = 0.86 }):Play()
+		for _, L in ipairs(shadowLayers) do
+			TweenService:Create(L.Scale, TweenCloseOut, { Scale = 0.86 }):Play()
+		end
+		task.delay(0.28, function()
+			if Gui then Gui:Destroy() end
+		end)
+	end
+
+	-- "Are you sure?" dialog. A dimmer covers the whole screen (and eats
+	-- clicks meant for the panel) while a small card pops in over the
+	-- window. Escape / clicking the dimmer cancels, Return confirms.
+	local confirmOpen = false
+	local function ConfirmClose()
+		if closing or confirmOpen then return end
+		confirmOpen = true
+
+		local Dim = Instance.new("Frame")
+		Dim.Name                   = "SkibidiCloseDim"
+		Dim.Size                   = UDim2.new(1, 0, 1, 0)
+		Dim.BackgroundColor3       = Color3.new(0, 0, 0)
+		Dim.BackgroundTransparency = 1
+		Dim.BorderSizePixel        = 0
+		Dim.Active                 = true
+		Dim.ZIndex                 = 100
+		Dim.Parent                 = Gui
+
+		local CARD_W, CARD_H = 250, 118
+		local Card = Instance.new("Frame")
+		Card.Size                   = UDim2.new(0, CARD_W, 0, CARD_H)
+		Card.AnchorPoint            = Vector2.new(0.5, 0.5)
+		Card.BackgroundColor3       = Theme.Bg1
+		Card.BackgroundTransparency = 0.02
+		Card.BorderSizePixel        = 0
+		Card.Active                 = true
+		Card.ZIndex                 = 101
+		Card.Parent                 = Dim
+		MakeCorner(Card, UDim.new(0, Theme.CornerRadius))
+		MakeEdge(Card, Theme.Danger, 1.2, 0.35)
+		MakeGloss(Card, 0.14)
+		MakeGrain(Card)
+		local CardGlow = MakeGlow(Card, Theme.Danger, 22, 0.82)
+		if CardGlow then CardGlow.ZIndex = 100 end
+
+		-- Centre the card on the panel, clamped so it never leaves the screen.
+		do
+			local fp, fs = Frame.AbsolutePosition, Frame.AbsoluteSize
+			local dp, ds = Dim.AbsolutePosition, Dim.AbsoluteSize
+			local cx = fp.X - dp.X + fs.X / 2
+			local cy = fp.Y - dp.Y + fs.Y / 2
+			cx = math.clamp(cx, CARD_W / 2 + 8, math.max(ds.X - CARD_W / 2 - 8, CARD_W / 2 + 8))
+			cy = math.clamp(cy, CARD_H / 2 + 8, math.max(ds.Y - CARD_H / 2 - 8, CARD_H / 2 + 8))
+			Card.Position = UDim2.new(0, cx, 0, cy)
+		end
+
+		local CardScale = Instance.new("UIScale")
+		CardScale.Scale  = 0.82
+		CardScale.Parent = Card
+
+		local Title = Instance.new("TextLabel")
+		Title.Size                   = UDim2.new(1, -28, 0, 18)
+		Title.Position               = UDim2.new(0, 14, 0, 14)
+		Title.BackgroundTransparency = 1
+		Title.Font                   = Theme.FontBold
+		Title.TextSize               = Theme.TitleSize
+		Title.TextColor3             = Theme.TextPrimary
+		Title.TextXAlignment         = Enum.TextXAlignment.Left
+		Title.Text                   = Options.CloseTitle or "Close panel?"
+		Title.ZIndex                 = 102
+		Title.Parent                 = Card
+
+		local Body = Instance.new("TextLabel")
+		Body.Size                   = UDim2.new(1, -28, 0, 30)
+		Body.Position               = UDim2.new(0, 14, 0, 34)
+		Body.BackgroundTransparency = 1
+		Body.Font                   = Theme.FontRegular
+		Body.TextSize               = Theme.SmallSize
+		Body.TextColor3             = Theme.TextMuted
+		Body.TextWrapped            = true
+		Body.TextXAlignment         = Enum.TextXAlignment.Left
+		Body.TextYAlignment         = Enum.TextYAlignment.Top
+		Body.Text                   = Options.CloseMessage
+			or "Are you sure? Everything in this window will be closed."
+		Body.ZIndex                 = 102
+		Body.Parent                 = Card
+
+		local function MakeDialogButton(text, x, w, bg, bgAlpha, fg, edge)
+			local B = Instance.new("TextButton")
+			B.Size                   = UDim2.new(0, w, 0, 28)
+			B.AnchorPoint            = Vector2.new(1, 1)
+			B.Position               = UDim2.new(1, x, 1, -12)
+			B.BackgroundColor3       = bg
+			B.BackgroundTransparency = bgAlpha
+			B.BorderSizePixel        = 0
+			B.Font                   = Theme.FontMedium
+			B.TextSize               = Theme.SmallSize
+			B.TextColor3             = fg
+			B.Text                   = text
+			B.AutoButtonColor        = false
+			B.ZIndex                 = 102
+			B.Parent                 = Card
+			MakeCorner(B, UDim.new(0, Theme.CornerRadiusSmall))
+			MakeEdge(B, edge, 1, 0.5)
+			MakeGloss(B, 0.16)
+			MakeRipple(B, fg, 8)
+			local sc = Instance.new("UIScale")
+			sc.Parent = B
+			B.MouseEnter:Connect(function()
+				TweenService:Create(sc, TweenFast, { Scale = 1.04 }):Play()
+				TweenService:Create(B, TweenFast, { BackgroundTransparency = math.max(bgAlpha - 0.15, 0) }):Play()
+			end)
+			B.MouseLeave:Connect(function()
+				TweenService:Create(sc, TweenFast, { Scale = 1 }):Play()
+				TweenService:Create(B, TweenFast, { BackgroundTransparency = bgAlpha }):Play()
+			end)
+			B.MouseButton1Down:Connect(function()
+				TweenService:Create(sc, TweenSnap, { Scale = 0.94 }):Play()
+			end)
+			B.MouseButton1Up:Connect(function()
+				TweenService:Create(sc, TweenPop, { Scale = 1 }):Play()
+			end)
+			return B
+		end
+
+		local YesBtn = MakeDialogButton("Close",  -14,        76, Theme.Danger, 0.12, Color3.new(1, 1, 1), Theme.Danger)
+		local NoBtn  = MakeDialogButton("Cancel", -14 - 76 - 6, 76, Theme.Bg2, 0, Theme.TextPrimary, Accent)
+
+		-- Pop in: dimmer darkens, card scales up from 0.82 while its
+		-- contents fade in from fully transparent.
+		local fade = CollectFade(Card, CardGlow and { CardGlow } or nil)
+		FadeTo(fade, 1)
+		TweenService:Create(Dim, TweenMed, { BackgroundTransparency = 0.45 }):Play()
+		TweenService:Create(CardScale, TweenPop, { Scale = 1 }):Play()
+		FadeTo(fade, 0, TweenMed)
+
+		local keyConn
+		local function Dismiss(confirmed)
+			if not confirmOpen then return end
+			confirmOpen = false
+			if keyConn then keyConn:Disconnect(); keyConn = nil end
+			TweenService:Create(Dim, TweenDlgOut, { BackgroundTransparency = 1 }):Play()
+			TweenService:Create(CardScale, TweenDlgOut, { Scale = 0.88 }):Play()
+			FadeTo(fade, 1, TweenDlgOut)
+			task.delay(0.18, function() if Dim.Parent then Dim:Destroy() end end)
+			if confirmed then CloseWindow() end
+		end
+
+		YesBtn.MouseButton1Click:Connect(function() Dismiss(true) end)
+		NoBtn.MouseButton1Click:Connect(function() Dismiss(false) end)
+		Dim.InputBegan:Connect(function(inp)
+			if inp.UserInputType ~= Enum.UserInputType.MouseButton1
+			and inp.UserInputType ~= Enum.UserInputType.Touch then return end
+			local p, s = Card.AbsolutePosition, Card.AbsoluteSize
+			local x, y = inp.Position.X, inp.Position.Y
+			if x < p.X or x > p.X + s.X or y < p.Y or y > p.Y + s.Y then
+				Dismiss(false)
+			end
+		end)
+		keyConn = ConnectScoped(Gui, UserInputService.InputBegan, function(inp, gp)
+			if inp.UserInputType ~= Enum.UserInputType.Keyboard then return end
+			if inp.KeyCode == Enum.KeyCode.Escape then
+				Dismiss(false)
+			elseif inp.KeyCode == Enum.KeyCode.Return and not gp then
+				Dismiss(true)
+			end
+		end)
+	end
+
+	-- Options.ConfirmClose = false skips the dialog and closes on click.
+	CloseBtn.MouseButton1Click:Connect(function()
+		if Options.ConfirmClose == false then CloseWindow() else ConfirmClose() end
+	end)
 	CloseBtn.MouseEnter:Connect(function()
 		TweenService:Create(CloseBtn, TweenFast, { BackgroundColor3 = Color3.fromRGB(200, 60, 60) }):Play()
 	end)
@@ -2940,7 +3165,8 @@ function Skibidi.CreatePanel(Options)
 		ToggleVisible = ToggleVisible,
 		IsVisible    = function() return Gui.Enabled end,
 		CloseBtn     = CloseBtn,
-		Close        = CloseWindow,
+		Close        = CloseWindow,   -- animated, no prompt
+		ConfirmClose = ConfirmClose,  -- opens the "are you sure?" dialog
 		DiscordBtn   = DiscordBtn,
 		SearchBtn    = SearchBtn,
 		SetSearchOpen = SetSearchOpen,
