@@ -2160,7 +2160,7 @@ function Skibidi.CreatePanel(Options)
 	-- ── Tab bar (optional) ─────────────────────────────────
 	-- "top"  — horizontal bar of equal-width buttons under the header
 	-- "left" — vertical rail of full-width buttons beside the content
-	local TabBar, TabBtns, TabUnderline, TabInd
+	local TabBar, TabBtns, TabUnderline, TabInd, RailBg
 	local tabGrads = {}
 	local tabIcons = {}   -- index -> ImageLabel (only tabs that have one)
 	local TAB_ICON = 14
@@ -2237,11 +2237,35 @@ function Skibidi.CreatePanel(Options)
 	elseif sideTabs then
 		-- Vertical tab rail on a slightly darker strip so it reads as
 		-- navigation, separated from content by a 1px divider.
+		-- The rail runs to the panel's bottom edge, and ClipsDescendants
+		-- clips to a rectangle, so a plain square rail would poke past
+		-- the panel's rounded bottom-left corner. The rail's fill lives in
+		-- a clipped sibling instead: the fill is oversized by one corner
+		-- radius up and to the right, so the clip keeps only its
+		-- bottom-left rounding and every other corner stays square.
+		local R = Theme.CornerRadius
+		RailBg = Instance.new("Frame")
+		RailBg.Position               = UDim2.new(0, 0, 0, HEADER_H)
+		RailBg.Size                   = UDim2.new(0, RAIL_W, 1, -HEADER_H)
+		RailBg.BackgroundTransparency = 1
+		RailBg.BorderSizePixel        = 0
+		RailBg.ClipsDescendants       = true
+		RailBg.ZIndex                 = 2
+		RailBg.Parent                 = Frame
+		local RailFill = Instance.new("Frame")
+		RailFill.Position               = UDim2.new(0, 0, 0, -R)
+		RailFill.Size                   = UDim2.new(1, R, 1, R)
+		RailFill.BackgroundColor3       = Theme.Bg0
+		RailFill.BackgroundTransparency = 0.35
+		RailFill.BorderSizePixel        = 0
+		RailFill.ZIndex                 = 2
+		RailFill.Parent                 = RailBg
+		MakeCorner(RailFill, UDim.new(0, R))
+
 		TabBar = Instance.new("Frame")
 		TabBar.Position               = UDim2.new(0, 0, 0, HEADER_H)
 		TabBar.Size                   = UDim2.new(0, RAIL_W, 1, -HEADER_H)
-		TabBar.BackgroundColor3       = Theme.Bg0
-		TabBar.BackgroundTransparency = 0.35
+		TabBar.BackgroundTransparency = 1
 		TabBar.BorderSizePixel        = 0
 		TabBar.ZIndex                 = 2
 		TabBar.Parent                 = Frame
@@ -2499,6 +2523,7 @@ function Skibidi.CreatePanel(Options)
 
 	local function setBodyVisible(visible)
 		if TabBar       then TabBar.Visible       = visible end
+		if RailBg       then RailBg.Visible       = visible end
 		if TabUnderline then TabUnderline.Visible = visible end
 		if TabInd       then TabInd.Visible       = visible end
 		if ScaleBtn     then ScaleBtn.Visible     = visible end
