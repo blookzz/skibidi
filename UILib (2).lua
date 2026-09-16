@@ -1,10 +1,17 @@
 -- ============================================================
--- UILib.lua  |  Self-contained loadstring library
+-- Skibidi UI  |  Self-contained loadstring library (skibidi edition)
 -- Usage:
--- local UILib = loadstring(game:HttpGet("https://raw.githubusercontent.com/blookzz/skibidi/refs/heads/main/UILib.lua"))()
+-- local Skibidi = loadstring(game:HttpGet("https://raw.githubusercontent.com/blookzz/skibidi/refs/heads/main/UILib.lua"))()
+--
+-- Translation: any label can be a "loc:key" instead of literal text once
+-- Skibidi.Localization({ Translations = { ... } }) has been called; see the
+-- LOCALIZATION section below.
 -- ============================================================
 
-local UILib = {}
+local Skibidi = {}
+Skibidi.Brand   = "skibidi"
+Skibidi.Name    = "Skibidi UI"
+Skibidi.Version = "skibidi-2.2.0"
 
 -- ============================================================
 -- SERVICES
@@ -18,11 +25,369 @@ local RunService       = game:GetService("RunService")
 local Players          = game:GetService("Players")
 local LocalPlayer      = Players.LocalPlayer
 local PlayerGui        = LocalPlayer:WaitForChild("PlayerGui")
+-- ============================================================
+-- LOCALIZATION  (translate)
+-- Any string handed to a control can be a *translation key*
+-- instead of literal text. A key is written with the prefix
+-- ("loc:" by default); everything without the prefix is left
+-- exactly as it was, so a script that never calls
+-- Skibidi.Localization behaves identically to before.
+--
+--   Skibidi.Localization({
+--       Translations = {
+--           en = { title = "Settings", play = "Play" },
+--           es = { title = "Ajustes",  play = "Jugar" },
+--       },
+--   })
+--   Skibidi.CreateButton(tab, { Text = "loc:play" })
+--   Skibidi.SetLanguage("es")   -- every live label re-renders
+--
+-- Options (all optional):
+--   Enabled          bool    Default true when Localization is called
+--   Prefix           string  Default "loc:"
+--   Language         string  Default the player's system locale
+--   DefaultLanguage  string  Fallback table, default "en"
+--   ShowMissing      bool    Default true — a key with no string
+--                            renders as "[key]" instead of "key"
+--   Translations     table   { [language] = { [key] = string } }
+--
+-- Labels are registered as they are created, so the language can
+-- be set before or after the UI is built; both end up correct.
+--
+-- API:
+--   Skibidi.Localization(options)        turn it on / reconfigure
+--   Skibidi.SetLanguage("es")            re-renders every live label
+--   Skibidi.GetLanguage()  GetLanguages()
+--   Skibidi.AddTranslations("es", { ... })
+--   Skibidi.Translate("loc:play")        resolve a key yourself
+--   Skibidi.SetTranslationKey(label, "loc:play")
+--   Skibidi.OnLanguageChanged(fn)        returns a disconnect
+--   Skibidi.IsLocalized()
+--
+-- The library's own wording is reachable under reserved "ui." keys,
+-- and stays English when a table leaves them out:
+--   ui.search  ui.select  ui.none  ui.listening  ui.confirm
+--   ui.copy    ui.copied  ui.clear_log  ui.play   ui.pause
+--   ui.close   ui.cancel  ui.close_title  ui.close_message
+-- ============================================================
+local Loc = {
+	Enabled         = false,
+	Prefix          = "loc:",
+	Language        = "en",
+	LocaleId        = "en-us",
+	DefaultLanguage = "en",
+	ShowMissing     = true,
+	Translations    = {},
+}
+
+-- The player's own locale is the starting language, so a script
+-- that ships an "es" table serves Spanish players without asking.
+do
+	local ok, id = pcall(function()
+		return game:GetService("LocalizationService").SystemLocaleId
+	end)
+	if ok and type(id) == "string" and id ~= "" then
+		Loc.LocaleId = string.lower(id)
+		Loc.Language = string.match(Loc.LocaleId, "^[a-z]+") or Loc.LocaleId
+	end
+end
+
+-- obj -> { Parented = bool, Props = { [property] = { Key, Raw, Transform } } }
+local LocObjects   = {}
+local LocListeners = {}
+local _locSinceSweep = 0
+
+-- "pt-br" should find a "pt-br" table, then a "pt" one. Matching
+-- the region first is what lets a script ship both without the
+-- broader table swallowing the narrower one.
+local function langTable(lang)
+	if type(lang) ~= "string" or lang == "" then return nil end
+	local T = Loc.Translations
+	if type(T) ~= "table" then return nil end
+	local lower = string.lower(lang)
+	return T[lang] or T[lower] or T[string.match(lower, "^[a-z]+") or ""]
+end
+
+local function lookupKey(key)
+	local t = langTable(Loc.Language)
+	local v = t and t[key]
+	if type(v) == "string" then return v end
+	t = langTable(Loc.DefaultLanguage)
+	v = t and t[key]
+	if type(v) == "string" then return v end
+	return nil
+end
+
+-- Returns the key behind a prefixed string, or nil for plain text.
+local function matchKey(text)
+	local p = Loc.Prefix
+	if type(text) ~= "string" or p == "" or #text <= #p then return nil end
+	if string.sub(text, 1, #p) ~= p then return nil end
+	return string.sub(text, #p + 1)
+end
+
+-- The string a registered label should be showing right now.
+local function resolved(entry)
+	if not Loc.Enabled then return entry.Raw end
+	local text = lookupKey(entry.Key)
+	if text then return text end
+	-- The library's own chrome carries its English wording as a fallback,
+	-- so an untranslated "ui.copy" reads "Copy" rather than "[ui.copy]".
+	if entry.Fallback ~= nil then return entry.Fallback end
+	return Loc.ShowMissing and ("[" .. entry.Key .. "]") or entry.Key
+end
+
+local function writeProp(obj, prop, text)
+	local ok = pcall(function() obj[prop] = text end)
+	return ok
+end
+
+-- A label whose instance has been destroyed stops being our
+-- problem; sweeping on a counter keeps that bookkeeping off the
+-- hot path. Objects are only dropped once they have been seen
+-- parented, so registering before :Parent is assigned is safe.
+local function sweepLocObjects()
+	for obj, rec in pairs(LocObjects) do
+		local ok, parent = pcall(function() return obj.Parent end)
+		if not ok then
+			LocObjects[obj] = nil
+		elseif parent ~= nil then
+			rec.Parented = true
+		elseif rec.Parented then
+			LocObjects[obj] = nil
+		end
+	end
+	for i = #LocListeners, 1, -1 do
+		local l = LocListeners[i]
+		if l.Guard then
+			local ok, parent = pcall(function() return l.Guard.Parent end)
+			if not ok or parent == nil then table.remove(LocListeners, i) end
+		end
+	end
+end
+
+local function register(obj, prop, key, raw, transform, fallback)
+	local rec = LocObjects[obj]
+	if not rec then
+		rec = { Parented = false, Props = {} }
+		LocObjects[obj] = rec
+		_locSinceSweep = _locSinceSweep + 1
+		if _locSinceSweep >= 64 then
+			_locSinceSweep = 0
+			sweepLocObjects()
+		end
+	end
+	local entry = rec.Props[prop]
+	if entry then
+		entry.Key, entry.Raw, entry.Transform, entry.Fallback = key, raw, transform, fallback
+	else
+		entry = { Key = key, Raw = raw, Transform = transform, Fallback = fallback }
+		rec.Props[prop] = entry
+	end
+	return entry
+end
+
+local function unregister(obj, prop)
+	local rec = LocObjects[obj]
+	if not rec then return end
+	rec.Props[prop] = nil
+	if next(rec.Props) == nil then LocObjects[obj] = nil end
+end
+
+-- The one call every text-carrying control goes through. `text` is
+-- either a translation key or plain text; `transform` is applied
+-- *after* translation (upper-casing, padding), so a key survives the
+-- decoration a label wants to put around it. Returns what was shown.
+local function SetTextProp(obj, prop, text, transform)
+	if type(text) ~= "string" then
+		text = text == nil and "" or tostring(text)
+	end
+	local key = matchKey(text)
+	local out
+	if key then
+		local entry = register(obj, prop, key, text, transform)
+		out = resolved(entry)
+	else
+		unregister(obj, prop)
+		out = text
+	end
+	if transform then out = transform(out) end
+	return out, writeProp(obj, prop, out)
+end
+
+-- Resolves a prefixed key inside a string a control assembles by hand.
+-- Prefix-only on purpose: a dropdown option called "play" is an option
+-- called "play", not a translation key that happens to collide.
+local function TranslateText(text)
+	local key = matchKey(text)
+	if not key or not Loc.Enabled then return text end
+	local v = lookupKey(key)
+	if v then return v end
+	return Loc.ShowMissing and ("[" .. key .. "]") or key
+end
+
+local function SetText(obj, text, transform)
+	return SetTextProp(obj, "Text", text, transform)
+end
+
+local function SetPlaceholder(obj, text)
+	return SetTextProp(obj, "PlaceholderText", text)
+end
+
+-- The library's own wording ("Copy", "Clear Log", "None", …) reads from a
+-- reserved "ui.<key>" entry when the loaded table defines one and stays
+-- English otherwise. A script translates the whole window without having
+-- to hand-label the parts it never wrote.
+local function SetUiTextProp(obj, prop, text, key)
+	local entry = register(obj, prop, "ui." .. key, text, nil, text)
+	local out = resolved(entry)
+	return out, writeProp(obj, prop, out)
+end
+
+local function SetUiText(obj, text, key)
+	return SetUiTextProp(obj, "Text", text, key)
+end
+
+-- Script-supplied text when there is any, the library's own otherwise.
+local function SetTextOr(obj, text, fallback, key)
+	if type(text) == "string" and text ~= "" then return SetText(obj, text) end
+	return SetUiText(obj, fallback, key)
+end
+
+-- Re-renders every registered label and fires every listener.
+local function UpdateLang()
+	sweepLocObjects()
+	for obj, rec in pairs(LocObjects) do
+		for prop, entry in pairs(rec.Props) do
+			local out = resolved(entry)
+			if entry.Transform then out = entry.Transform(out) end
+			writeProp(obj, prop, out)
+		end
+	end
+	for _, l in ipairs(LocListeners) do
+		pcall(l.Fn, Loc.Language)
+	end
+end
+
+-- Internal: a control whose text is assembled from several pieces
+-- (the dropdown's "a, b, c" summary) re-runs its own refresh here
+-- instead of registering a label it does not own outright.
+local function BindLang(guard, fn)
+	local l = { Fn = fn, Guard = guard }
+	table.insert(LocListeners, l)
+	return function()
+		for i = #LocListeners, 1, -1 do
+			if LocListeners[i] == l then table.remove(LocListeners, i) end
+		end
+	end
+end
+
+-- Colon calls (Skibidi:SetLanguage"es") and dot calls both work.
+local function unself(...)
+	if (select(1, ...)) == Skibidi then return select(2, ...) end
+	return ...
+end
+
+-- ------------------------------------------------------------
+-- Public API
+-- ------------------------------------------------------------
+
+-- Turns translation on and returns the live config table.
+function Skibidi.Localization(...)
+	local Options = unself(...) or {}
+	if type(Options) ~= "table" then Options = {} end
+	if Options.Prefix          then Loc.Prefix          = Options.Prefix end
+	if Options.DefaultLanguage then Loc.DefaultLanguage = Options.DefaultLanguage end
+	if Options.Language        then Loc.Language        = Options.Language end
+	if type(Options.Translations) == "table" then
+		Loc.Translations = Options.Translations
+	end
+	if Options.ShowMissing ~= nil then Loc.ShowMissing = Options.ShowMissing == true end
+	-- Calling this at all means "translate"; Enabled = false is how
+	-- you keep a configured table switched off.
+	Loc.Enabled = Options.Enabled ~= false
+	UpdateLang()
+	return Loc
+end
+
+-- Merges one language's strings in, creating the table if needed.
+function Skibidi.AddTranslations(...)
+	local lang, tbl = unself(...)
+	if type(lang) ~= "string" or type(tbl) ~= "table" then return false end
+	local T = Loc.Translations[lang]
+	if type(T) ~= "table" then
+		T = {}
+		Loc.Translations[lang] = T
+	end
+	for k, v in pairs(tbl) do T[k] = v end
+	UpdateLang()
+	return true
+end
+
+function Skibidi.SetLanguage(...)
+	local lang = unself(...)
+	if type(lang) ~= "string" or lang == "" then return false end
+	Loc.Language = lang
+	UpdateLang()
+	return true
+end
+
+function Skibidi.GetLanguage()
+	return Loc.Language
+end
+
+-- Every language the loaded tables can serve, sorted.
+function Skibidi.GetLanguages()
+	local out = {}
+	for lang in pairs(Loc.Translations) do table.insert(out, lang) end
+	table.sort(out)
+	return out
+end
+
+-- Resolves a key (prefixed or bare) to its string. Plain text with
+-- no matching key comes back untouched, so it is safe to wrap any
+-- string a script is about to print.
+function Skibidi.Translate(...)
+	local text = unself(...)
+	if type(text) ~= "string" then return text end
+	local key = matchKey(text)
+	if key then
+		if not Loc.Enabled then return text end
+		local v = lookupKey(key)
+		if v then return v end
+		return Loc.ShowMissing and ("[" .. key .. "]") or key
+	end
+	if Loc.Enabled then
+		local v = lookupKey(text)
+		if v then return v end
+	end
+	return text
+end
+
+-- Re-points an existing label at another key (or plain text).
+function Skibidi.SetTranslationKey(...)
+	local obj, text, prop = unself(...)
+	if obj == nil or type(text) ~= "string" then return false end
+	local _, ok = SetTextProp(obj, prop or "Text", text)
+	return ok == true
+end
+
+-- fn(language) on every language change. Returns a disconnect.
+function Skibidi.OnLanguageChanged(...)
+	local fn = unself(...)
+	if type(fn) ~= "function" then return function() end end
+	return BindLang(nil, fn)
+end
+
+function Skibidi.IsLocalized()
+	return Loc.Enabled
+end
+
 
 -- ============================================================
 -- THEME  (matches the gold/dark reference style by default)
 -- Override any key before calling Create functions:
---   UILib.Theme.Accent = Color3.fromRGB(120, 80, 220)
+--   Skibidi.Theme.Accent = Color3.fromRGB(120, 80, 220)
 -- ============================================================
 local Theme = {
 	-- Surfaces
@@ -116,12 +481,12 @@ local Theme = {
 	RippleAsset      = "rbxassetid://266543268",
 	SpinnerAsset     = "rbxassetid://4965945816",
 }
-UILib.Theme = Theme
+Skibidi.Theme = Theme
 
 -- ============================================================
 -- THEME PRESETS
--- UILib.SetTheme("neon")            -- swap the whole palette
--- UILib.SetTheme({ Accent = ... })  -- or merge in your own keys
+-- Skibidi.SetTheme("neon")            -- swap the whole palette
+-- Skibidi.SetTheme({ Accent = ... })  -- or merge in your own keys
 --
 -- Themes are read at *construction* time, so call this before you
 -- create any panels. Existing widgets keep the palette they were
@@ -209,9 +574,9 @@ local Presets = {
 		InputBg = Color3.fromRGB(12,12,12),
 	},
 }
-UILib.Presets = Presets
+Skibidi.Presets = Presets
 
-function UILib.SetTheme(nameOrTable)
+function Skibidi.SetTheme(nameOrTable)
 	local src = nameOrTable
 	if type(src) == "string" then src = Presets[src:lower()] end
 	if type(src) ~= "table" then return Theme end
@@ -223,7 +588,7 @@ function UILib.SetTheme(nameOrTable)
 	return Theme
 end
 
-function UILib.GetThemeNames()
+function Skibidi.GetThemeNames()
 	local out = {}
 	for k in pairs(Presets) do out[#out+1] = k end
 	table.sort(out)
@@ -337,7 +702,7 @@ local function ToHex(c)
 		math.floor(c.G * 255 + 0.5),
 		math.floor(c.B * 255 + 0.5))
 end
-UILib.Lighten, UILib.Darken, UILib.Mix, UILib.HueShift = Lighten, Darken, Mix, HueShift
+Skibidi.Lighten, Skibidi.Darken, Skibidi.Mix, Skibidi.HueShift = Lighten, Darken, Mix, HueShift
 
 -- The two endpoints every accent fill uses. Explicit Theme overrides win;
 -- otherwise a subtle hue rotation either side of Accent gives the fill a
@@ -348,7 +713,7 @@ local function AccentPair(accent)
 	local b = Theme.AccentGrad2 or Darken (HueShift(accent, -14), 0.06)
 	return a, b
 end
-UILib.AccentPair = AccentPair
+Skibidi.AccentPair = AccentPair
 
 -- ── Shared animation driver ─────────────────────────────────
 -- One Heartbeat connection drives every rotating gradient in the whole
@@ -509,7 +874,7 @@ local function MakeAccentFill(parent, accent, flow)
 	-- keeping it off `g` means the fill's colour and its highlight can be
 	-- animated independently.
 	local Sheen = Instance.new("Frame")
-	Sheen.Name                   = "Flow"
+	Sheen.Name                   = "SkibidiFlow"
 	Sheen.Size                   = UDim2.new(1, 0, 1, 0)
 	Sheen.BackgroundColor3       = Color3.new(1, 1, 1)
 	Sheen.BorderSizePixel        = 0
@@ -561,7 +926,7 @@ local function MakeGlow(target, color, spread, transparency)
 	spread = spread or 22
 
 	local G = Instance.new("ImageLabel")
-	G.Name                   = "Glow"
+	G.Name                   = "SkibidiGlow"
 	G.BackgroundTransparency = 1
 	G.Image                  = Theme.ShadowAsset
 	G.ImageColor3            = color or Theme.Accent
@@ -636,7 +1001,7 @@ local function MakeInnerGlow(target, color, spread, transparency)
 		local inset = (i - 1) * step
 
 		local R = Instance.new("Frame")
-		R.Name                   = "GlowRing"
+		R.Name                   = "SkibidiGlowRing"
 		R.AnchorPoint            = Vector2.new(0.5, 0.5)
 		R.Position               = UDim2.new(0.5, 0, 0.5, 0)
 		R.Size                   = UDim2.new(1, inset * 2, 1, inset * 2)
@@ -688,7 +1053,7 @@ end
 local function MakeGrain(parent)
 	if not Theme.Grain then return nil end
 	local N = Instance.new("ImageLabel")
-	N.Name                   = "Grain"
+	N.Name                   = "SkibidiGrain"
 	N.Size                   = UDim2.new(1, 0, 1, 0)
 	N.BackgroundTransparency = 1
 	N.Image                  = Theme.GrainAsset
@@ -708,7 +1073,7 @@ local function MakeRipple(button, color, radius)
 	if not Theme.Ripple then return end
 
 	local Host = Instance.new("Frame")
-	Host.Name                   = "RippleHost"
+	Host.Name                   = "SkibidiRippleHost"
 	Host.Size                   = UDim2.new(1, 0, 1, 0)
 	Host.BackgroundTransparency = 1
 	Host.BorderSizePixel        = 0
@@ -769,7 +1134,7 @@ local function MakeShine(target, radius, hostParent)
 	if not Theme.Shine then return function() end end
 
 	local Bar = Instance.new("Frame")
-	Bar.Name                   = "Shine"
+	Bar.Name                   = "SkibidiShine"
 	Bar.Size                   = UDim2.new(1, 0, 1, 0)
 	Bar.BackgroundColor3       = Color3.new(1, 1, 1)
 	Bar.BorderSizePixel        = 0
@@ -815,7 +1180,7 @@ end
 -- tween loop that stops the moment it's hidden or destroyed.
 local function MakeSpinner(parent, size, color)
 	local S = Instance.new("ImageLabel")
-	S.Name                   = "Spinner"
+	S.Name                   = "SkibidiSpinner"
 	S.AnchorPoint            = Vector2.new(0.5, 0.5)
 	S.Position               = UDim2.new(0.5, 0, 0.5, 0)
 	S.Size                   = UDim2.new(0, size or 18, 0, size or 18)
@@ -985,11 +1350,11 @@ end
 -- here so SaveConfig/LoadConfig can persist and restore their values.
 -- Purely opt-in: components without a Flag are never registered.
 local Flags = {}
-UILib.Flags = Flags
+Skibidi.Flags = Flags
 
 -- ── Panel registry ──────────────────────────────────────────
 -- Every ScreenGui the library creates is tracked here so
--- UILib.Unload() can tear the whole UI down in one call.
+-- Skibidi.Unload() can tear the whole UI down in one call.
 local _allGuis = {}
 
 -- ── Tooltip ─────────────────────────────────────────────────
@@ -1001,7 +1366,7 @@ local _tooltipSg, _tooltipFrame, _tooltipLbl
 local function _ensureTooltip()
 	if _tooltipSg and _tooltipSg.Parent then return end
 	_tooltipSg = Instance.new("ScreenGui")
-	_tooltipSg.Name           = "UILibTooltip"
+	_tooltipSg.Name           = "SkibidiTooltip"
 	_tooltipSg.ResetOnSpawn   = false
 	_tooltipSg.DisplayOrder   = 2000
 	_tooltipSg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
@@ -1042,7 +1407,7 @@ local function AttachTooltip(target, text)
 	if not text or text == "" then return end
 	target.MouseEnter:Connect(function()
 		_ensureTooltip()
-		_tooltipLbl.Text      = text
+		SetText(_tooltipLbl, text)
 		_tooltipFrame.Visible = true
 		_positionTooltip()
 	end)
@@ -1058,7 +1423,7 @@ local function AttachTooltip(target, text)
 end
 
 -- Default parent used by CreatePanel when Options.Parent is omitted.
--- Overridable in one place via UILib.Init({ Parent = someInstance }).
+-- Overridable in one place via Skibidi.Init({ Parent = someInstance }).
 local DefaultParent = PlayerGui
 
 -- ============================================================
@@ -1118,11 +1483,11 @@ end
 -- created immediately and fills in when the download lands.
 --
 -- Public API:
---   UILib.ResolveIcon(spec)          -> asset id string | nil (sync)
---   UILib.PreloadIcons([pack], [cb]) -> warm the full map up front
---   UILib.AddIcons([pack], {name = id, ...})
---   UILib.CreateIcon(parent, spec, size, color) -> { Label, Set(spec) }
---   UILib.SetIcon(imageLabel, spec)
+--   Skibidi.ResolveIcon(spec)          -> asset id string | nil (sync)
+--   Skibidi.PreloadIcons([pack], [cb]) -> warm the full map up front
+--   Skibidi.AddIcons([pack], {name = id, ...})
+--   Skibidi.CreateIcon(parent, spec, size, color) -> { Label, Set(spec) }
+--   Skibidi.SetIcon(imageLabel, spec)
 -- ============================================================
 local ICON_PACK_URLS = {
 	lucide = "https://raw.githubusercontent.com/Footagesus/Icons/refs/heads/main/lucide/dist/Icons.lua",
@@ -1325,7 +1690,7 @@ local ICON_ALIASES = {
 local iconPackState   = {}   -- pack -> "loading" | "loaded" | "failed"
 local iconPackWaiters = {}   -- pack -> { fn(ok), ... }
 local iconWarned      = {}   -- spec -> true once an "unknown icon" warning fired
-UILib.Icons = IconPacks
+Skibidi.Icons = IconPacks
 
 local function httpGet(url)
 	local ok, res = pcall(function() return game:HttpGet(url) end)
@@ -1361,7 +1726,7 @@ end
 
 -- Synchronous lookup. nil means "not known *yet*" for a lucide name that
 -- is outside the embedded subset and hasn't been downloaded.
-function UILib.ResolveIcon(spec)
+function Skibidi.ResolveIcon(spec)
 	if spec == nil or spec == "" then return nil end
 	if type(spec) == "number" then return "rbxassetid://" .. tostring(spec) end
 	if type(spec) ~= "string" then return nil end
@@ -1405,7 +1770,7 @@ local function loadIconPack(pack, onDone)
 		end
 		iconPackState[pack] = ok and "loaded" or "failed"
 		if not ok then
-			warn(("[UILib] icon pack %q could not be downloaded; only the embedded icons are available"):format(pack))
+			warn(("[Skibidi] icon pack %q could not be downloaded; only the embedded icons are available"):format(pack))
 		end
 		local waiters = iconPackWaiters[pack]
 		iconPackWaiters[pack] = nil
@@ -1415,7 +1780,7 @@ end
 
 -- Downloads the full map now (e.g. at script start) so no icon ever
 -- shows up a beat late. `cb(ok)` is optional.
-function UILib.PreloadIcons(pack, cb)
+function Skibidi.PreloadIcons(pack, cb)
 	if type(pack) == "function" then pack, cb = nil, pack end
 	loadIconPack(pack or DEFAULT_ICON_PACK, cb)
 end
@@ -1423,7 +1788,7 @@ end
 -- Register custom names, WindUI AddIcons style: { name = id, ... }.
 -- The id may be a number, "rbxassetid://…", or a WindUI spritesheet
 -- entry (only its Image is used).
-function UILib.AddIcons(pack, tbl)
+function Skibidi.AddIcons(pack, tbl)
 	if type(pack) == "table" and tbl == nil then pack, tbl = DEFAULT_ICON_PACK, pack end
 	if type(tbl) ~= "table" then return end
 	IconPacks[pack] = IconPacks[pack] or {}
@@ -1443,7 +1808,7 @@ local function SetIconImage(label, spec)
 	if not label then return false end
 	local key = (spec ~= nil and spec ~= "") and tostring(spec) or nil
 	label:SetAttribute("IconSpec", key)
-	local id = UILib.ResolveIcon(spec)
+	local id = Skibidi.ResolveIcon(spec)
 	if id then
 		label.Image = id
 		return true
@@ -1454,7 +1819,7 @@ local function SetIconImage(label, spec)
 	local function unknown()
 		if not iconWarned[spec] then
 			iconWarned[spec] = true
-			warn(("[UILib] unknown icon %q"):format(spec))
+			warn(("[Skibidi] unknown icon %q"):format(spec))
 		end
 	end
 	if iconPackState[pack] == "loaded" or iconPackState[pack] == "failed" then
@@ -1463,7 +1828,7 @@ local function SetIconImage(label, spec)
 	end
 	loadIconPack(pack, function(ok)
 		if label:GetAttribute("IconSpec") ~= key then return end
-		local late = UILib.ResolveIcon(spec)
+		local late = Skibidi.ResolveIcon(spec)
 		if late then
 			label.Image = late
 		elseif ok then
@@ -1472,11 +1837,11 @@ local function SetIconImage(label, spec)
 	end)
 	return false
 end
-UILib.SetIcon = SetIconImage
+Skibidi.SetIcon = SetIconImage
 
 local function MakeIcon(parent, spec, size, color, zindex)
 	local L = Instance.new("ImageLabel")
-	L.Name                   = "Icon"
+	L.Name                   = "SkibidiIcon"
 	L.Size                   = UDim2.new(0, size or 14, 0, size or 14)
 	L.BackgroundTransparency = 1
 	L.BorderSizePixel        = 0
@@ -1489,7 +1854,7 @@ local function MakeIcon(parent, spec, size, color, zindex)
 end
 
 -- Standalone icon for callers building their own layouts.
-function UILib.CreateIcon(Parent, spec, size, color)
+function Skibidi.CreateIcon(Parent, spec, size, color)
 	if type(spec) == "table" then
 		local o = spec
 		spec, size, color = o.Icon, o.Size or size, o.Color or color
@@ -1590,7 +1955,7 @@ end
 -- Creates a draggable panel with optional tab bar.
 --
 -- Options:
---   Name         string    ScreenGui name              (default "Panel")
+--   Name         string    ScreenGui name              (default "SkibidiPanel")
 --   Title        string    Header title text           (default "")
 --   Width        number    Width in pixels             (default 310)
 --   Height       number    Content height in pixels    (default 300)
@@ -1627,6 +1992,10 @@ end
 --                          (default half the panel's initial size)
 --   MaxSize      Vector2 | {w, h}   Largest size the grip allows
 --                          (default double the panel's initial size)
+--   ConfirmClose bool      Close chip asks "are you sure?" before
+--                          closing                     (default true)
+--   CloseTitle   string    Dialog heading   (default "Close panel?")
+--   CloseMessage string    Dialog body text (optional)
 --   MinWidth / MinHeight / MaxWidth / MaxHeight   number
 --                          Per-axis overrides of the two above
 --
@@ -1641,13 +2010,13 @@ end
 --     GetTabButton(index), SetTitle(text), SetSubTitle(text),
 --     SetIcon(spec), SetTabIcon(index, spec), GetTabIcon(index),
 --     SetVisible(bool), ToggleVisible(), IsVisible(),
---     SetMinimized(bool), IsMinimized(), Close(),
+--     SetMinimized(bool), IsMinimized(), Close(), ConfirmClose(),
 --     SetSearchOpen(bool), IsSearchOpen(), SetSearch(text),
 --     SetSize(w, h), GetSize(),
 --     SearchBtn, ScaleBtn (nil when the option is off)
 --   }
 -- ============================================================
-function UILib.CreatePanel(Options)
+function Skibidi.CreatePanel(Options)
 	Options = Options or {}
 
 	local Width      = Options.Width  or 310
@@ -1700,7 +2069,7 @@ function UILib.CreatePanel(Options)
 
 	-- ── ScreenGui ──────────────────────────────────────────
 	local Gui = Instance.new("ScreenGui")
-	Gui.Name           = Options.Name or "Panel"
+	Gui.Name           = Options.Name or "SkibidiPanel"
 	Gui.ResetOnSpawn   = false
 	Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 	Gui.Parent         = Options.Parent or DefaultParent
@@ -1734,7 +2103,7 @@ function UILib.CreatePanel(Options)
 	local shadowLayers = {}
 	local function makeShadowLayer(pad, alpha, drop)
 		local L = Instance.new("ImageLabel")
-		L.Name                   = "Shadow"
+		L.Name                   = "SkibidiShadow"
 		L.BackgroundTransparency = 1
 		L.Image                  = Theme.ShadowAsset
 		L.ImageColor3            = Color3.new(0, 0, 0)
@@ -1846,7 +2215,7 @@ function UILib.CreatePanel(Options)
 	local TitleIcon
 	if Options.Icon then
 		TitleIcon = MakeIcon(Header, Options.Icon, TITLE_ICON, Theme.AccentSec, 3)
-		TitleIcon.Name        = "TitleIcon"
+		TitleIcon.Name        = "SkibidiTitleIcon"
 		TitleIcon.AnchorPoint = Vector2.new(0, 0.5)
 		TitleIcon.Position    = UDim2.new(0, 11, 0.5, 0)
 		TitlePip.Visible      = false
@@ -1868,7 +2237,7 @@ function UILib.CreatePanel(Options)
 	TitleLabel.TextColor3             = Theme.AccentSec
 	TitleLabel.TextXAlignment         = Enum.TextXAlignment.Left
 	TitleLabel.TextTruncate           = Enum.TextTruncate.AtEnd
-	TitleLabel.Text                   = Options.Title or ""
+	SetText(TitleLabel, Options.Title or "")
 	TitleLabel.ZIndex                 = 3
 	TitleLabel.Parent                 = Header
 
@@ -1882,8 +2251,10 @@ function UILib.CreatePanel(Options)
 	end
 
 	-- Optional subtitle, rendered as a rounded muted pill after the title
-	local plainTitle    = Options.Title    or ""
-	local plainSubTitle = Options.SubTitle or ""
+	-- Both are read back off the label rather than out of Options, so a
+	-- translated title is what the minimize logic measures.
+	local plainTitle    = TitleLabel.Text
+	local plainSubTitle = TranslateText(Options.SubTitle or "")
 	local SubPill, SubLabel
 
 	local function measureText(str, size, font)
@@ -1916,7 +2287,7 @@ function UILib.CreatePanel(Options)
 		SubLabel.TextSize               = Theme.CaptionSize
 		SubLabel.TextColor3             = Theme.TextMuted
 		SubLabel.TextXAlignment         = Enum.TextXAlignment.Left
-		SubLabel.Text                   = plainSubTitle
+		SetText(SubLabel, Options.SubTitle or "")
 		SubLabel.ZIndex                 = 4
 		SubLabel.Parent                 = SubPill
 	end
@@ -2044,7 +2415,7 @@ function UILib.CreatePanel(Options)
 	-- the fallback shown while the download runs or when the executor has
 	-- no writefile/getcustomasset.
 	local DISCORD_ICON_URL  = "https://files.catbox.moe/gvgnul.png"
-	local DISCORD_ICON_FILE = "UILib_discord.png"
+	local DISCORD_ICON_FILE = "skibidi_discord.png"
 	local DISCORD_ICON_ID   = "rbxassetid://94434236999817"
 
 	local DiscordBtn
@@ -2111,7 +2482,7 @@ function UILib.CreatePanel(Options)
 	local SearchBtn, SearchIcon, SearchBox
 	if showSearch then
 		SearchBtn = MakeHeaderChip("", nextChipX())
-		SearchBtn.Name = "Search"
+		SearchBtn.Name = "SkibidiSearch"
 
 		SearchIcon = Instance.new("ImageLabel")
 		SearchIcon.Size                   = UDim2.new(0, 13, 0, 13)
@@ -2126,7 +2497,7 @@ function UILib.CreatePanel(Options)
 		-- The box takes over the title's slot so nothing else in the
 		-- header has to move; it is only visible while search is open.
 		SearchBox = Instance.new("TextBox")
-		SearchBox.Name                   = "SearchBox"
+		SearchBox.Name                   = "SkibidiSearchBox"
 		SearchBox.Size                   = UDim2.new(1, -(reservedRight + TITLE_X), 0, 22)
 		SearchBox.AnchorPoint            = Vector2.new(0, 0.5)
 		SearchBox.Position               = UDim2.new(0, TITLE_X, 0.5, 0)
@@ -2136,7 +2507,7 @@ function UILib.CreatePanel(Options)
 		SearchBox.Font                   = Theme.FontMedium
 		SearchBox.TextSize               = Theme.SmallSize
 		SearchBox.TextColor3             = Theme.TextPrimary
-		SearchBox.PlaceholderText        = "Search…"
+		SetUiTextProp(SearchBox, "PlaceholderText", "Search…", "search")
 		SearchBox.PlaceholderColor3      = Theme.TextMuted
 		SearchBox.TextXAlignment         = Enum.TextXAlignment.Left
 		SearchBox.TextTruncate           = Enum.TextTruncate.AtEnd
@@ -2153,7 +2524,7 @@ function UILib.CreatePanel(Options)
 	-- ── Tab bar (optional) ─────────────────────────────────
 	-- "top"  — horizontal bar of equal-width buttons under the header
 	-- "left" — vertical rail of full-width buttons beside the content
-	local TabBar, TabBtns, TabUnderline, TabInd
+	local TabBar, TabBtns, TabUnderline, TabInd, RailBg
 	local tabGrads = {}
 	local tabIcons = {}   -- index -> ImageLabel (only tabs that have one)
 	local TAB_ICON = 14
@@ -2199,7 +2570,7 @@ function UILib.CreatePanel(Options)
 			btn.Font              = Theme.FontMedium
 			btn.TextSize          = Theme.SmallSize
 			btn.TextColor3        = Theme.TextMuted
-			btn.Text              = "  " .. name .. "  "
+			SetText(btn, name, function(s) return "  " .. s .. "  " end)
 			btn.ZIndex            = 3
 			btn.Parent            = TabBar
 			MakeCorner(btn, UDim.new(0, 7))
@@ -2230,11 +2601,35 @@ function UILib.CreatePanel(Options)
 	elseif sideTabs then
 		-- Vertical tab rail on a slightly darker strip so it reads as
 		-- navigation, separated from content by a 1px divider.
+		-- The rail runs to the panel's bottom edge, and ClipsDescendants
+		-- clips to a rectangle, so a plain square rail would poke past
+		-- the panel's rounded bottom-left corner. The rail's fill lives in
+		-- a clipped sibling instead: the fill is oversized by one corner
+		-- radius up and to the right, so the clip keeps only its
+		-- bottom-left rounding and every other corner stays square.
+		local R = Theme.CornerRadius
+		RailBg = Instance.new("Frame")
+		RailBg.Position               = UDim2.new(0, 0, 0, HEADER_H)
+		RailBg.Size                   = UDim2.new(0, RAIL_W, 1, -HEADER_H)
+		RailBg.BackgroundTransparency = 1
+		RailBg.BorderSizePixel        = 0
+		RailBg.ClipsDescendants       = true
+		RailBg.ZIndex                 = 2
+		RailBg.Parent                 = Frame
+		local RailFill = Instance.new("Frame")
+		RailFill.Position               = UDim2.new(0, 0, 0, -R)
+		RailFill.Size                   = UDim2.new(1, R, 1, R)
+		RailFill.BackgroundColor3       = Theme.Bg0
+		RailFill.BackgroundTransparency = 0.35
+		RailFill.BorderSizePixel        = 0
+		RailFill.ZIndex                 = 2
+		RailFill.Parent                 = RailBg
+		MakeCorner(RailFill, UDim.new(0, R))
+
 		TabBar = Instance.new("Frame")
 		TabBar.Position               = UDim2.new(0, 0, 0, HEADER_H)
 		TabBar.Size                   = UDim2.new(0, RAIL_W, 1, -HEADER_H)
-		TabBar.BackgroundColor3       = Theme.Bg0
-		TabBar.BackgroundTransparency = 0.35
+		TabBar.BackgroundTransparency = 1
 		TabBar.BorderSizePixel        = 0
 		TabBar.ZIndex                 = 2
 		TabBar.Parent                 = Frame
@@ -2265,7 +2660,7 @@ function UILib.CreatePanel(Options)
 			btn.TextColor3        = Theme.TextMuted
 			btn.TextXAlignment    = Enum.TextXAlignment.Left
 			btn.TextTruncate      = Enum.TextTruncate.AtEnd
-			btn.Text              = name
+			SetText(btn, name)
 			btn.ZIndex            = 3
 			btn.Parent            = TabBar
 			MakeCorner(btn, UDim.new(0, 7))
@@ -2492,6 +2887,7 @@ function UILib.CreatePanel(Options)
 
 	local function setBodyVisible(visible)
 		if TabBar       then TabBar.Visible       = visible end
+		if RailBg       then RailBg.Visible       = visible end
 		if TabUnderline then TabUnderline.Visible = visible end
 		if TabInd       then TabInd.Visible       = visible end
 		if ScaleBtn     then ScaleBtn.Visible     = visible end
@@ -2632,8 +3028,10 @@ function UILib.CreatePanel(Options)
 		if open and isMinimized then SetMinimized(false) end
 		searchOpen = open
 
+		-- Only the title and subtitle give way to the box; the header
+		-- icon stays put, like the pip does, so the window keeps its
+		-- identity while you type.
 		TitleLabel.Visible = not open
-		if TitleIcon then TitleIcon.Visible = not open end
 		if SubPill then SubPill.Visible = (not open) and plainSubTitle ~= "" end
 		SearchBox.Visible = open
 		SearchBox.Text    = ""
@@ -2738,7 +3136,7 @@ function UILib.CreatePanel(Options)
 
 	if showScaler then
 		ScaleBtn = Instance.new("ImageButton")
-		ScaleBtn.Name                   = "ResizeGrip"
+		ScaleBtn.Name                   = "SkibidiResizeGrip"
 		ScaleBtn.Size                   = UDim2.new(0, 16, 0, 16)
 		ScaleBtn.AnchorPoint            = Vector2.new(1, 1)
 		ScaleBtn.Position               = UDim2.new(1, -5, 1, -5)
@@ -2788,11 +3186,243 @@ function UILib.CreatePanel(Options)
 		end)
 	end
 
-	local function CloseWindow()
-		if Gui then Gui:Destroy() end
+	-- ── Closing ────────────────────────────────────────────
+	-- Fade helpers: every transparency-bearing descendant remembers its
+	-- resting value so the whole tree can be faded out (t = 1) and back
+	-- in (t = 0) without a per-element special case.
+	local function CollectFade(root, extra)
+		local list = {}
+		local function add(o)
+			if o:IsA("UIStroke") then
+				list[#list+1] = { o, "Transparency", o.Transparency }
+			elseif o:IsA("GuiObject") then
+				list[#list+1] = { o, "BackgroundTransparency", o.BackgroundTransparency }
+				if o:IsA("TextLabel") or o:IsA("TextButton") or o:IsA("TextBox") then
+					list[#list+1] = { o, "TextTransparency", o.TextTransparency }
+				end
+				if o:IsA("ImageLabel") or o:IsA("ImageButton") then
+					list[#list+1] = { o, "ImageTransparency", o.ImageTransparency }
+				end
+				if o:IsA("ScrollingFrame") then
+					list[#list+1] = { o, "ScrollBarImageTransparency", o.ScrollBarImageTransparency }
+				end
+			end
+		end
+		add(root)
+		for _, d in ipairs(root:GetDescendants()) do add(d) end
+		for _, o in ipairs(extra or {}) do add(o) end
+		return list
+	end
+	local function FadeTo(list, t, info)
+		for _, e in ipairs(list) do
+			local obj, prop, rest = e[1], e[2], e[3]
+			local v = rest + (1 - rest) * t
+			if info then
+				TweenService:Create(obj, info, { [prop] = v }):Play()
+			else
+				obj[prop] = v
+			end
+		end
 	end
 
-	CloseBtn.MouseButton1Click:Connect(CloseWindow)
+	local TweenCloseOut = TweenInfo.new(0.26, Enum.EasingStyle.Back,  Enum.EasingDirection.In)
+	local TweenFadeOut  = TweenInfo.new(0.22, Enum.EasingStyle.Quad,  Enum.EasingDirection.In)
+	local TweenDlgOut   = TweenInfo.new(0.16, Enum.EasingStyle.Quad,  Enum.EasingDirection.In)
+
+	local closing = false
+	-- Shrinks the panel back the way it arrived, fades everything (shadow
+	-- and bloom included) and only then destroys the ScreenGui.
+	local function CloseWindow()
+		if closing or not Gui or not Gui.Parent then return end
+		closing = true
+		local extra = {}
+		for _, L in ipairs(shadowLayers) do extra[#extra+1] = L.Obj end
+		if Bloom then extra[#extra+1] = Bloom end
+		local fade = CollectFade(Frame, extra)
+		FadeTo(fade, 1, TweenFadeOut)
+		TweenService:Create(OpenScale, TweenCloseOut, { Scale = 0.86 }):Play()
+		for _, L in ipairs(shadowLayers) do
+			TweenService:Create(L.Scale, TweenCloseOut, { Scale = 0.86 }):Play()
+		end
+		task.delay(0.28, function()
+			if Gui then Gui:Destroy() end
+		end)
+	end
+
+	-- "Are you sure?" dialog. A dimmer covers just the panel (mirroring
+	-- its position, size and corner radius, and eating clicks meant for
+	-- it) while a small card pops in over the middle. Escape / clicking
+	-- the dimmer cancels, Return confirms.
+	local confirmOpen = false
+	local function ConfirmClose()
+		if closing or confirmOpen then return end
+		confirmOpen = true
+
+		-- The dimmer is a sibling of the panel (not a child) so a card
+		-- taller than a minimized panel can still hang past its edges.
+		local Dim = Instance.new("Frame")
+		Dim.Name                   = "SkibidiCloseDim"
+		Dim.Position               = Frame.Position
+		Dim.Size                   = Frame.Size
+		Dim.BackgroundColor3       = Color3.new(0, 0, 0)
+		Dim.BackgroundTransparency = 1
+		Dim.BorderSizePixel        = 0
+		Dim.Active                 = true
+		Dim.ZIndex                 = 100
+		Dim.Parent                 = Gui
+		MakeCorner(Dim, UDim.new(0, Theme.CornerRadius))
+		local dimPosConn = Frame:GetPropertyChangedSignal("Position"):Connect(function()
+			Dim.Position = Frame.Position
+		end)
+		local dimSizeConn = Frame:GetPropertyChangedSignal("Size"):Connect(function()
+			Dim.Size = Frame.Size
+		end)
+
+		-- Holder carries the anchor and the pop scale so the card itself
+		-- (and the glow MakeGlow hangs off it) can stay top-left anchored.
+		local CARD_W, CARD_H = 250, 118
+		local Holder = Instance.new("Frame")
+		Holder.Size                   = UDim2.new(0, CARD_W, 0, CARD_H)
+		Holder.AnchorPoint            = Vector2.new(0.5, 0.5)
+		Holder.Position               = UDim2.new(0.5, 0, 0.5, 0)
+		Holder.BackgroundTransparency = 1
+		Holder.ZIndex                 = 100
+		Holder.Parent                 = Dim
+
+		local CardScale = Instance.new("UIScale")
+		CardScale.Scale  = 0.82
+		CardScale.Parent = Holder
+
+		local Card = Instance.new("Frame")
+		Card.Size                   = UDim2.new(1, 0, 1, 0)
+		Card.BackgroundColor3       = Theme.Bg1
+		Card.BackgroundTransparency = 0.02
+		Card.BorderSizePixel        = 0
+		Card.Active                 = true
+		Card.ZIndex                 = 101
+		Card.Parent                 = Holder
+		MakeCorner(Card, UDim.new(0, Theme.CornerRadius))
+		MakeEdge(Card, Theme.Danger, 1.2, 0.35)
+		MakeGloss(Card, 0.14)
+		MakeGrain(Card)
+		local CardGlow = MakeGlow(Card, Theme.Danger, 14, 0.84)
+		if CardGlow then CardGlow.ZIndex = 100 end
+
+		local Title = Instance.new("TextLabel")
+		Title.Size                   = UDim2.new(1, -28, 0, 18)
+		Title.Position               = UDim2.new(0, 14, 0, 14)
+		Title.BackgroundTransparency = 1
+		Title.Font                   = Theme.FontBold
+		Title.TextSize               = Theme.TitleSize
+		Title.TextColor3             = Theme.TextPrimary
+		Title.TextXAlignment         = Enum.TextXAlignment.Left
+		SetTextOr(Title, Options.CloseTitle, "Close panel?", "close_title")
+		Title.ZIndex                 = 102
+		Title.Parent                 = Card
+
+		local Body = Instance.new("TextLabel")
+		Body.Size                   = UDim2.new(1, -28, 0, 30)
+		Body.Position               = UDim2.new(0, 14, 0, 34)
+		Body.BackgroundTransparency = 1
+		Body.Font                   = Theme.FontRegular
+		Body.TextSize               = Theme.SmallSize
+		Body.TextColor3             = Theme.TextMuted
+		Body.TextWrapped            = true
+		Body.TextXAlignment         = Enum.TextXAlignment.Left
+		Body.TextYAlignment         = Enum.TextYAlignment.Top
+		SetTextOr(Body, Options.CloseMessage,
+			"Are you sure? Everything in this window will be closed.", "close_message")
+		Body.ZIndex                 = 102
+		Body.Parent                 = Card
+
+		local function MakeDialogButton(text, uiKey, x, w, bg, bgAlpha, fg, edge)
+			local B = Instance.new("TextButton")
+			B.Size                   = UDim2.new(0, w, 0, 28)
+			B.AnchorPoint            = Vector2.new(1, 1)
+			B.Position               = UDim2.new(1, x, 1, -12)
+			B.BackgroundColor3       = bg
+			B.BackgroundTransparency = bgAlpha
+			B.BorderSizePixel        = 0
+			B.Font                   = Theme.FontMedium
+			B.TextSize               = Theme.SmallSize
+			B.TextColor3             = fg
+			SetUiText(B, text, uiKey)
+			B.AutoButtonColor        = false
+			B.ZIndex                 = 102
+			B.Parent                 = Card
+			MakeCorner(B, UDim.new(0, Theme.CornerRadiusSmall))
+			MakeEdge(B, edge, 1, 0.5)
+			MakeGloss(B, 0.16)
+			MakeRipple(B, fg, 8)
+			local sc = Instance.new("UIScale")
+			sc.Parent = B
+			B.MouseEnter:Connect(function()
+				TweenService:Create(sc, TweenFast, { Scale = 1.04 }):Play()
+				TweenService:Create(B, TweenFast, { BackgroundTransparency = math.max(bgAlpha - 0.15, 0) }):Play()
+			end)
+			B.MouseLeave:Connect(function()
+				TweenService:Create(sc, TweenFast, { Scale = 1 }):Play()
+				TweenService:Create(B, TweenFast, { BackgroundTransparency = bgAlpha }):Play()
+			end)
+			B.MouseButton1Down:Connect(function()
+				TweenService:Create(sc, TweenSnap, { Scale = 0.94 }):Play()
+			end)
+			B.MouseButton1Up:Connect(function()
+				TweenService:Create(sc, TweenPop, { Scale = 1 }):Play()
+			end)
+			return B
+		end
+
+		local YesBtn = MakeDialogButton("Close",  "close",  -14,        76, Theme.Danger, 0.12, Color3.new(1, 1, 1), Theme.Danger)
+		local NoBtn  = MakeDialogButton("Cancel", "cancel", -14 - 76 - 6, 76, Theme.Bg2, 0, Theme.TextPrimary, Accent)
+
+		-- Pop in: dimmer darkens, card scales up from 0.82 while its
+		-- contents fade in from fully transparent.
+		local fade = CollectFade(Card, CardGlow and { CardGlow } or nil)
+		FadeTo(fade, 1)
+		TweenService:Create(Dim, TweenMed, { BackgroundTransparency = 0.45 }):Play()
+		TweenService:Create(CardScale, TweenPop, { Scale = 1 }):Play()
+		FadeTo(fade, 0, TweenMed)
+
+		local keyConn
+		local function Dismiss(confirmed)
+			if not confirmOpen then return end
+			confirmOpen = false
+			if keyConn then keyConn:Disconnect(); keyConn = nil end
+			dimPosConn:Disconnect()
+			dimSizeConn:Disconnect()
+			TweenService:Create(Dim, TweenDlgOut, { BackgroundTransparency = 1 }):Play()
+			TweenService:Create(CardScale, TweenDlgOut, { Scale = 0.88 }):Play()
+			FadeTo(fade, 1, TweenDlgOut)
+			task.delay(0.18, function() if Dim.Parent then Dim:Destroy() end end)
+			if confirmed then CloseWindow() end
+		end
+
+		YesBtn.MouseButton1Click:Connect(function() Dismiss(true) end)
+		NoBtn.MouseButton1Click:Connect(function() Dismiss(false) end)
+		Dim.InputBegan:Connect(function(inp)
+			if inp.UserInputType ~= Enum.UserInputType.MouseButton1
+			and inp.UserInputType ~= Enum.UserInputType.Touch then return end
+			local p, s = Card.AbsolutePosition, Card.AbsoluteSize
+			local x, y = inp.Position.X, inp.Position.Y
+			if x < p.X or x > p.X + s.X or y < p.Y or y > p.Y + s.Y then
+				Dismiss(false)
+			end
+		end)
+		keyConn = ConnectScoped(Gui, UserInputService.InputBegan, function(inp, gp)
+			if inp.UserInputType ~= Enum.UserInputType.Keyboard then return end
+			if inp.KeyCode == Enum.KeyCode.Escape then
+				Dismiss(false)
+			elseif inp.KeyCode == Enum.KeyCode.Return and not gp then
+				Dismiss(true)
+			end
+		end)
+	end
+
+	-- Options.ConfirmClose = false skips the dialog and closes on click.
+	CloseBtn.MouseButton1Click:Connect(function()
+		if Options.ConfirmClose == false then CloseWindow() else ConfirmClose() end
+	end)
 	CloseBtn.MouseEnter:Connect(function()
 		TweenService:Create(CloseBtn, TweenFast, { BackgroundColor3 = Color3.fromRGB(200, 60, 60) }):Play()
 	end)
@@ -2875,10 +3505,9 @@ function UILib.CreatePanel(Options)
 		else
 			if not TitleIcon then
 				TitleIcon = MakeIcon(Header, spec, TITLE_ICON, Theme.AccentSec, 3)
-				TitleIcon.Name        = "TitleIcon"
+				TitleIcon.Name        = "SkibidiTitleIcon"
 				TitleIcon.AnchorPoint = Vector2.new(0, 0.5)
 				TitleIcon.Position    = UDim2.new(0, 11, 0.5, 0)
-				TitleIcon.Visible     = not searchOpen
 			else
 				SetIconImage(TitleIcon, spec)
 			end
@@ -2913,8 +3542,7 @@ function UILib.CreatePanel(Options)
 		GetActiveTab = function() return activeTab end,
 		GetTabButton = function(i) return TabBtns and TabBtns[i] end,
 		SetTitle     = function(t)
-			plainTitle      = t or ""
-			TitleLabel.Text = plainTitle
+			plainTitle      = SetText(TitleLabel, t or "")
 			layoutTitle()
 			if isMinimized then
 				Frame.Size = UDim2.new(0, computeMinimizedWidth(), 0, HEADER_H)
@@ -2922,8 +3550,7 @@ function UILib.CreatePanel(Options)
 		end,
 		SetSubTitle  = function(t)
 			if not SubLabel then return end
-			plainSubTitle  = t or ""
-			SubLabel.Text  = plainSubTitle
+			plainSubTitle  = SetText(SubLabel, t or "")
 			SubPill.Visible = plainSubTitle ~= ""
 			layoutTitle()
 			if isMinimized then
@@ -2936,7 +3563,8 @@ function UILib.CreatePanel(Options)
 		ToggleVisible = ToggleVisible,
 		IsVisible    = function() return Gui.Enabled end,
 		CloseBtn     = CloseBtn,
-		Close        = CloseWindow,
+		Close        = CloseWindow,   -- animated, no prompt
+		ConfirmClose = ConfirmClose,  -- opens the "are you sure?" dialog
 		DiscordBtn   = DiscordBtn,
 		SearchBtn    = SearchBtn,
 		SetSearchOpen = SetSearchOpen,
@@ -2969,7 +3597,7 @@ end
 -- Returns:
 --   { Frame, Content, SetOpen(bool), IsOpen(), SetTitle(text), SetIcon(spec) }
 -- ============================================================
-function UILib.CreateSection(Parent, Options)
+function Skibidi.CreateSection(Parent, Options)
 	Options = Options or {}
 	local title    = Options.Title or ""
 	local startOpen = Options.Open == true  -- default false
@@ -3024,7 +3652,7 @@ function UILib.CreateSection(Parent, Options)
 	TitleLbl.TextSize               = Theme.SmallSize + 1
 	TitleLbl.TextColor3             = Theme.Accent
 	TitleLbl.TextXAlignment         = Enum.TextXAlignment.Left
-	TitleLbl.Text                   = title
+	SetText(TitleLbl, title)
 
 	local SecIcon = Options.Icon and PrefixIcon(TitleLbl, Options.Icon, 14, Theme.Accent) or nil
 
@@ -3100,7 +3728,7 @@ function UILib.CreateSection(Parent, Options)
 		Content  = Content,
 		SetOpen  = SetOpen,
 		IsOpen   = function() return isOpen end,
-		SetTitle = function(t) TitleLbl.Text = t or "" end,
+		SetTitle = function(t) SetText(TitleLbl, t or "") end,
 		SetIcon  = function(spec)
 			if SecIcon then
 				SetIconImage(SecIcon, spec)
@@ -3131,7 +3759,7 @@ end
 --
 -- Returns: { Frame, Button, SetText(text), SetDisabled(bool), SetIcon(spec) }
 -- ============================================================
-function UILib.CreateButton(Parent, Options)
+function Skibidi.CreateButton(Parent, Options)
 	Options = Options or {}
 
 	local RowBg = Instance.new("Frame")
@@ -3157,7 +3785,7 @@ function UILib.CreateButton(Parent, Options)
 	Btn.TextSize               = Theme.BodySize
 	Btn.TextColor3             = Options.TextColor or Theme.TextPrimary
 	Btn.TextXAlignment         = Enum.TextXAlignment.Center
-	Btn.Text                   = Options.Text or ""
+	SetText(Btn, Options.Text or "")
 	Btn.AutoButtonColor        = false
 	Btn.Parent                 = RowBg
 
@@ -3247,7 +3875,7 @@ function UILib.CreateButton(Parent, Options)
 	local function disarm()
 		armed = false
 		armToken = armToken + 1
-		Btn.Text = baseText
+		SetText(Btn, baseText)
 		TweenService:Create(RowEdge, TweenFast,
 			{ Color = EdgeRest(), Transparency = Theme.StrokeAlpha or 0.34 }):Play()
 		TweenService:Create(Underline, TweenFast, { Size = UDim2.new(0, 0, 0, 2) }):Play()
@@ -3260,7 +3888,7 @@ function UILib.CreateButton(Parent, Options)
 			armed = true
 			armToken = armToken + 1
 			local myToken = armToken
-			Btn.Text = Options.ConfirmText or "Confirm?"
+			SetTextOr(Btn, Options.ConfirmText, "Confirm?", "confirm")
 			TweenService:Create(Btn, TweenFast, { TextColor3 = Theme.Warning }):Play()
 			if BtnIcon then TweenService:Create(BtnIcon, TweenFast, { ImageColor3 = Theme.Warning }):Play() end
 			TweenService:Create(RowEdge, TweenFast,
@@ -3295,7 +3923,7 @@ function UILib.CreateButton(Parent, Options)
 	return {
 		Frame       = RowBg,
 		Button      = Btn,
-		SetText     = function(t) baseText = t or ""; if not armed then Btn.Text = baseText end end,
+		SetText     = function(t) baseText = t or ""; if not armed then SetText(Btn, baseText) end end,
 		SetDisabled = SetDisabled,
 		SetIcon     = function(spec)
 			if BtnIcon then
@@ -3322,7 +3950,7 @@ end
 --   Icon         string   Lucide icon before the label (optional)
 -- Returns: { Frame, Set(bool), GetValue(), SetDisabled(bool) }
 -- ============================================================
-function UILib.CreateToggle(Parent, Options)
+function Skibidi.CreateToggle(Parent, Options)
 	Options = Options or {}
 	local state = Options.Default == true
 
@@ -3351,7 +3979,7 @@ function UILib.CreateToggle(Parent, Options)
 	Lbl.TextSize               = Theme.BodySize
 	Lbl.TextColor3             = Theme.TextPrimary
 	Lbl.TextXAlignment         = Enum.TextXAlignment.Left
-	Lbl.Text                   = Options.Label or ""
+	SetText(Lbl, Options.Label or "")
 	if Options.Icon then PrefixIcon(Lbl, Options.Icon, 14, Theme.TextPrimary) end
 
 	-- Track
@@ -3484,7 +4112,7 @@ end
 --   Icon         string   Lucide icon before the label (optional)
 -- Returns: { Frame, TextBox, GetValue() }
 -- ============================================================
-function UILib.CreateTextInput(Parent, Options)
+function Skibidi.CreateTextInput(Parent, Options)
 	Options = Options or {}
 	local boxW = Options.Width or 60
 
@@ -3505,7 +4133,7 @@ function UILib.CreateTextInput(Parent, Options)
 	Lbl.TextSize               = Theme.BodySize
 	Lbl.TextColor3             = Theme.TextPrimary
 	Lbl.TextXAlignment         = Enum.TextXAlignment.Left
-	Lbl.Text                   = Options.Label or ""
+	SetText(Lbl, Options.Label or "")
 	if Options.Icon then PrefixIcon(Lbl, Options.Icon, 14, Theme.TextPrimary) end
 
 	local Box = Instance.new("TextBox", Row)
@@ -3517,7 +4145,7 @@ function UILib.CreateTextInput(Parent, Options)
 	Box.Font              = Theme.FontMedium
 	Box.TextSize          = Theme.SmallSize
 	Box.TextColor3        = Theme.AccentSec
-	Box.PlaceholderText   = Options.Placeholder or ""
+	SetPlaceholder(Box, Options.Placeholder or "")
 	Box.PlaceholderColor3 = Theme.TextMuted
 	Box.TextXAlignment    = Enum.TextXAlignment.Center
 	Box.ClearTextOnFocus  = false
@@ -3602,7 +4230,7 @@ end
 --   Icon       string   Lucide icon before the label (optional)
 -- Returns: { Frame, Update(value), GetValue() }
 -- ============================================================
-function UILib.CreateSlider(Parent, Options)
+function Skibidi.CreateSlider(Parent, Options)
 	Options = Options or {}
 	local Min   = Options.Min     or 0
 	local Max   = Options.Max     or 100
@@ -3630,7 +4258,7 @@ function UILib.CreateSlider(Parent, Options)
 		Lbl.TextColor3       = Theme.TextPrimary
 		Lbl.TextXAlignment   = Enum.TextXAlignment.Left
 		Lbl.TextTruncate     = Enum.TextTruncate.AtEnd
-		Lbl.Text             = Options.Label
+		SetText(Lbl, Options.Label)
 		if Options.Icon then PrefixIcon(Lbl, Options.Icon, 14, Theme.TextPrimary) end
 	end
 
@@ -3766,7 +4394,7 @@ end
 -- Returns:
 --   { Frame, GetValues(), SetValue(i, text) }
 -- ============================================================
-function UILib.CreateInputList(Parent, Options)
+function Skibidi.CreateInputList(Parent, Options)
 	Options = Options or {}
 	local count  = Options.Count    or 10
 	local h      = Options.Height   or 120
@@ -3800,7 +4428,7 @@ function UILib.CreateInputList(Parent, Options)
 	Lbl.TextSize               = Theme.BodySize
 	Lbl.TextColor3             = Theme.TextPrimary
 	Lbl.TextXAlignment         = Enum.TextXAlignment.Left
-	Lbl.Text                   = label
+	SetText(Lbl, label)
 	if Options.Icon then PrefixIcon(Lbl, Options.Icon, 14, Theme.TextPrimary) end
 
 	local Div = Instance.new("Frame", Card)
@@ -3866,7 +4494,7 @@ function UILib.CreateInputList(Parent, Options)
 		TB.Font               = Theme.FontMedium
 		TB.TextSize           = 11
 		TB.TextColor3         = Theme.TextPrimary
-		TB.PlaceholderText    = ph
+		SetPlaceholder(TB, ph)
 		TB.PlaceholderColor3  = Theme.TextMuted
 		TB.TextXAlignment     = Enum.TextXAlignment.Left
 		TB.ClearTextOnFocus   = false
@@ -3931,7 +4559,7 @@ end
 --   { Frame, Log(msg, color?), Clear() }
 --   Log's optional color tints that entry (e.g. red for errors).
 -- ============================================================
-function UILib.CreateStatusLog(Parent, Options)
+function Skibidi.CreateStatusLog(Parent, Options)
 	Options = Options or {}
 	local h = Options.Height or 200
 
@@ -3973,7 +4601,7 @@ function UILib.CreateStatusLog(Parent, Options)
 	ClearBtn.Font                   = Theme.FontMedium
 	ClearBtn.TextSize               = Theme.SmallSize
 	ClearBtn.TextColor3             = Theme.TextMuted
-	ClearBtn.Text                   = "Clear Log"
+	SetUiText(ClearBtn, "Clear Log", "clear_log")
 	ClearBtn.AutoButtonColor        = false
 	MakeRipple(ClearBtn, Theme.Accent, 6)
 
@@ -4054,7 +4682,7 @@ end
 --
 -- Returns the divider Frame.
 -- ============================================================
-function UILib.CreateDivider(Parent, Options)
+function Skibidi.CreateDivider(Parent, Options)
 	Options = Options or {}
 
 	-- A rule that stops dead at both edges boxes the content in. Fading
@@ -4107,7 +4735,7 @@ function UILib.CreateDivider(Parent, Options)
 	Cap.Font                   = Theme.FontMedium
 	Cap.TextSize               = Theme.CaptionSize
 	Cap.TextColor3             = Theme.Accent
-	Cap.Text                   = string.upper(Options.Text)
+	SetText(Cap, Options.Text, string.upper)
 	MakePadding(Cap, 10, 10, 1, 1)
 
 	return Holder
@@ -4132,7 +4760,7 @@ local NOTIF_PAD  = 8
 local function _ensureNotifGui()
 	if _notifSg and _notifSg.Parent then return end
 	_notifSg = Instance.new("ScreenGui")
-	_notifSg.Name           = "UILibNotifs"
+	_notifSg.Name           = "SkibidiNotifs"
 	_notifSg.ResetOnSpawn   = false
 	_notifSg.DisplayOrder   = 999
 	_notifSg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
@@ -4166,7 +4794,7 @@ local NOTIF_KINDS = {
 	danger  = { "circle-x",       "Danger"  },
 	info    = { "info",           "Info"    },
 }
-function UILib.ShowNotification(Title, Text, Duration, Icon)
+function Skibidi.ShowNotification(Title, Text, Duration, Icon)
 	_ensureNotifGui()
 
 	if type(Title) == "table" then
@@ -4226,7 +4854,7 @@ function UILib.ShowNotification(Title, Text, Duration, Icon)
 	TitleLbl.TextXAlignment         = Enum.TextXAlignment.Left
 	TitleLbl.TextTruncate           = Enum.TextTruncate.AtEnd
 	TitleLbl.ZIndex                 = 2
-	TitleLbl.Text                   = (Title or ""):upper()
+	SetText(TitleLbl, Title or "", string.upper)
 
 	local Lbl = Instance.new("TextLabel", F)
 	Lbl.Size                   = UDim2.new(1, textW, 0, 16)
@@ -4238,7 +4866,7 @@ function UILib.ShowNotification(Title, Text, Duration, Icon)
 	Lbl.TextXAlignment         = Enum.TextXAlignment.Left
 	Lbl.TextTruncate           = Enum.TextTruncate.AtEnd
 	Lbl.ZIndex                 = 2
-	Lbl.Text                   = Text or ""
+	SetText(Lbl, Text or "")
 
 	-- Countdown rule along the bottom: the banner shows how long it has
 	-- left instead of vanishing without warning.
@@ -4288,7 +4916,7 @@ end
 --   ClampToScreen  bool   Keep Target inside its parent container
 --                         while dragging (default false)
 -- ============================================================
-function UILib.MakeDraggable(Handle, Target, Options)
+function Skibidi.MakeDraggable(Handle, Target, Options)
 	Options = Options or {}
 	local clampToScreen = Options.ClampToScreen == true
 	local dragging, dragStart, startPos = false, nil, nil
@@ -4336,7 +4964,7 @@ end
 --
 -- Returns: { Frame, SetTitle(text), SetText(text), SetIcon(spec) }
 -- ============================================================
-function UILib.CreateParagraph(Parent, Options)
+function Skibidi.CreateParagraph(Parent, Options)
 	Options = Options or {}
 
 	local Card = Instance.new("Frame")
@@ -4363,7 +4991,7 @@ function UILib.CreateParagraph(Parent, Options)
 		TitleLbl.TextXAlignment         = Enum.TextXAlignment.Left
 		TitleLbl.TextWrapped            = true
 		TitleLbl.LayoutOrder            = 0
-		TitleLbl.Text                   = Options.Title
+		SetText(TitleLbl, Options.Title)
 		if Options.Icon then
 			ParaIcon = PadIcon(TitleLbl, Options.Icon, 14, Theme.Accent)
 		end
@@ -4395,12 +5023,12 @@ function UILib.CreateParagraph(Parent, Options)
 	Body.TextYAlignment         = Enum.TextYAlignment.Top
 	Body.TextWrapped            = true
 	Body.LayoutOrder            = 2
-	Body.Text                   = Options.Content or Options.Text or ""
+	SetText(Body, Options.Content or Options.Text or "")
 
 	return {
 		Frame    = Card,
-		SetTitle = function(t) if TitleLbl then TitleLbl.Text = t end end,
-		SetText  = function(t) Body.Text = t end,
+		SetTitle = function(t) if TitleLbl then SetText(TitleLbl, t) end end,
+		SetText  = function(t) SetText(Body, t) end,
 		SetIcon  = function(spec)
 			if ParaIcon then
 				SetIconImage(ParaIcon, spec)
@@ -4426,7 +5054,7 @@ end
 --
 -- Returns: { Frame, Update(value, instant), GetValue() }
 -- ============================================================
-function UILib.CreateProgressBar(Parent, Options)
+function Skibidi.CreateProgressBar(Parent, Options)
 	Options = Options or {}
 	local Min = Options.Min or 0
 	local Max = Options.Max or 100
@@ -4454,7 +5082,7 @@ function UILib.CreateProgressBar(Parent, Options)
 	Lbl.TextColor3             = Theme.TextPrimary
 	Lbl.TextXAlignment         = Enum.TextXAlignment.Left
 	Lbl.TextTruncate           = Enum.TextTruncate.AtEnd
-	Lbl.Text                   = Options.Label or ""
+	SetText(Lbl, Options.Label or "")
 	if Options.Icon then PrefixIcon(Lbl, Options.Icon, 14, Theme.TextPrimary) end
 
 	local PctLbl = Instance.new("TextLabel", TopRow)
@@ -4507,7 +5135,7 @@ function UILib.CreateProgressBar(Parent, Options)
 		Frame    = Row,
 		Update   = Update,
 		GetValue = function() return cur end,
-		SetLabel = function(t) Lbl.Text = t or "" end,
+		SetLabel = function(t) SetText(Lbl, t or "") end,
 	}
 end
 
@@ -4520,7 +5148,7 @@ end
 --   Height   number   (default 8) — used when the parent stacks vertically
 --   Width    number   (default 8) — used when the parent stacks horizontally
 -- ============================================================
-function UILib.CreateSpace(Parent, Options)
+function Skibidi.CreateSpace(Parent, Options)
 	Options = Options or {}
 	local Spacer = Instance.new("Frame")
 	Spacer.Size                   = UDim2.new(0, Options.Width or 0, 0, Options.Height or 8)
@@ -4548,7 +5176,7 @@ end
 --
 -- Returns: { Frame }
 -- ============================================================
-function UILib.CreateHStack(Parent, Options)
+function Skibidi.CreateHStack(Parent, Options)
 	Options = Options or {}
 	local gap = Options.Spacing or 6
 
@@ -4589,7 +5217,7 @@ function UILib.CreateHStack(Parent, Options)
 	return { Frame = Stack }
 end
 
-function UILib.CreateVStack(Parent, Options)
+function Skibidi.CreateVStack(Parent, Options)
 	Options = Options or {}
 	local Stack = Instance.new("Frame")
 	Stack.Size                   = UDim2.new(1, 0, 0, 0)
@@ -4617,7 +5245,7 @@ end
 --
 -- Returns: { Frame, SetValue(index), GetValue() }
 -- ============================================================
-function UILib.CreateGroup(Parent, Options)
+function Skibidi.CreateGroup(Parent, Options)
 	Options = Options or {}
 	local items   = Options.Options or {}
 	local current = Options.Default or 1
@@ -4643,7 +5271,7 @@ function UILib.CreateGroup(Parent, Options)
 		Lbl.TextColor3             = Theme.Accent
 		Lbl.TextXAlignment         = Enum.TextXAlignment.Left
 		Lbl.LayoutOrder            = 0
-		Lbl.Text                   = Options.Label
+		SetText(Lbl, Options.Label)
 	end
 
 	local rows = {}
@@ -4721,7 +5349,7 @@ function UILib.CreateGroup(Parent, Options)
 		Lbl.TextColor3             = Theme.TextPrimary
 		Lbl.TextXAlignment         = Enum.TextXAlignment.Left
 		Lbl.ZIndex                 = 2
-		Lbl.Text                   = text
+		SetText(Lbl, text)
 
 		rows[i] = { Row = Row, Tick = Tick, Dot = Dot, Ring = ring, Lbl = Lbl }
 
@@ -4788,7 +5416,7 @@ end
 -- Returns: { Frame, SetOpen(bool), GetValue(),
 --            SetItems(items, keepSelection) }
 -- ============================================================
-function UILib.CreateDropdown(Parent, Options)
+function Skibidi.CreateDropdown(Parent, Options)
 	Options = Options or {}
 	local items = Options.Options or {}
 	local multi = Options.Multi == true
@@ -4834,7 +5462,7 @@ function UILib.CreateDropdown(Parent, Options)
 		Lbl.TextSize               = Theme.BodySize
 		Lbl.TextColor3             = Theme.TextPrimary
 		Lbl.TextXAlignment         = Enum.TextXAlignment.Left
-		Lbl.Text                   = Options.Label
+		SetText(Lbl, Options.Label)
 		if Options.Icon then PrefixIcon(Lbl, Options.Icon, 14, Theme.TextPrimary) end
 	end
 
@@ -4880,10 +5508,16 @@ function UILib.CreateDropdown(Parent, Options)
 	local function refreshLabel()
 		local out = {}
 		for _, val in ipairs(items) do
-			if selected[val] then table.insert(out, val) end
+			-- The summary shows the translated option names; GetValue and
+			-- OnChanged still speak in the raw values the script passed in.
+			if selected[val] then table.insert(out, TranslateText(val)) end
 		end
 		local any = #out > 0
-		ValueLbl.Text = any and table.concat(out, ", ") or (Options.Placeholder or "Select...")
+		if any then
+			SetText(ValueLbl, table.concat(out, ", "))
+		else
+			SetTextOr(ValueLbl, Options.Placeholder, "Select...", "select")
+		end
 		-- An empty select should look empty. Painting the placeholder in
 		-- the accent made "nothing chosen" read as a live value.
 		TweenService:Create(ValueLbl, TweenFast,
@@ -4990,7 +5624,7 @@ function UILib.CreateDropdown(Parent, Options)
 		RLbl.TextColor3             = selected[text] and Theme.ActiveTabText or Theme.TextPrimary
 		RLbl.TextXAlignment         = Enum.TextXAlignment.Left
 		RLbl.ZIndex                 = 2
-		RLbl.Text                   = text
+		SetText(RLbl, text)
 
 		optRows[text] = { Row = Row, Tick = Tick, Dot = Dot, Ring = ring,
 		                  Lbl = RLbl, Scale = scale, Order = i }
@@ -5043,6 +5677,9 @@ function UILib.CreateDropdown(Parent, Options)
 
 	buildRows()
 	refreshLabel()
+	-- The summary is assembled from several strings, so it is rebuilt on a
+	-- language change instead of being registered as one translated label.
+	BindLang(Card, refreshLabel)
 	AttachTooltip(Head, Options.Tooltip)
 
 	Head.MouseButton1Click:Connect(function()
@@ -5118,7 +5755,7 @@ end
 --   Icon       string   Lucide icon before the label (optional)
 -- Returns: { Frame, Set(keyCode), GetValue() }
 -- ============================================================
-function UILib.CreateKeybind(Parent, Options)
+function Skibidi.CreateKeybind(Parent, Options)
 	Options = Options or {}
 	local current = Options.Default
 	if type(current) == "string" then
@@ -5142,7 +5779,7 @@ function UILib.CreateKeybind(Parent, Options)
 	Lbl.TextSize               = Theme.BodySize
 	Lbl.TextColor3             = Theme.TextPrimary
 	Lbl.TextXAlignment         = Enum.TextXAlignment.Left
-	Lbl.Text                   = Options.Label or ""
+	SetText(Lbl, Options.Label or "")
 	if Options.Icon then PrefixIcon(Lbl, Options.Icon, 14, Theme.TextPrimary) end
 
 	local KeyBtn = Instance.new("TextButton", Row)
@@ -5155,7 +5792,10 @@ function UILib.CreateKeybind(Parent, Options)
 	KeyBtn.TextSize               = Theme.SmallSize
 	KeyBtn.TextColor3             = Theme.AccentSec
 	KeyBtn.AutoButtonColor        = false
-	KeyBtn.Text                   = current and current.Name or "None"
+	local function showKey(kc)
+		if kc then SetText(KeyBtn, kc.Name) else SetUiText(KeyBtn, "None", "none") end
+	end
+	showKey(current)
 	MakeCorner(KeyBtn, UDim.new(0, 5))
 	local keyStroke = MakeEdge(KeyBtn, Theme.AccentDim, 1)
 	MakeGloss(KeyBtn, 0.10)
@@ -5176,12 +5816,12 @@ function UILib.CreateKeybind(Parent, Options)
 	KeyBtn.MouseButton1Click:Connect(function()
 		if listening then stopListening(); return end
 		listening = true
-		KeyBtn.Text = "..."
+		SetUiText(KeyBtn, "...", "listening")
 		TweenService:Create(keyStroke, TweenFast, { Color = Theme.Accent, Thickness = 1.5 }):Play()
 		conn = UserInputService.InputBegan:Connect(function(inp)
 			if inp.UserInputType == Enum.UserInputType.Keyboard then
 				current = inp.KeyCode
-				KeyBtn.Text = current.Name
+				showKey(current)
 				stopListening()
 				if Options.OnChanged then Options.OnChanged(current) end
 			end
@@ -5209,7 +5849,7 @@ function UILib.CreateKeybind(Parent, Options)
 				end
 				if typeof(kc) == "EnumItem" then
 					current = kc
-					KeyBtn.Text = kc.Name
+					showKey(kc)
 					if Options.OnChanged then Options.OnChanged(current) end
 				end
 			end,
@@ -5220,7 +5860,7 @@ function UILib.CreateKeybind(Parent, Options)
 		Frame = Row,
 		Set = function(kc)
 			current = kc
-			KeyBtn.Text = kc and kc.Name or "None"
+			showKey(kc)
 		end,
 		GetValue = function() return current end,
 	}
@@ -5238,7 +5878,7 @@ end
 --
 -- Returns: { Frame, SetText(text) }
 -- ============================================================
-function UILib.CreateCode(Parent, Options)
+function Skibidi.CreateCode(Parent, Options)
 	Options = Options or {}
 	local fixedH = Options.Height
 
@@ -5283,7 +5923,7 @@ function UILib.CreateCode(Parent, Options)
 		CopyBtn.Font                   = Theme.FontMedium
 		CopyBtn.TextSize               = 10
 		CopyBtn.TextColor3             = Theme.TextMuted
-		CopyBtn.Text                   = "Copy"
+		SetUiText(CopyBtn, "Copy", "copy")
 		CopyBtn.AutoButtonColor        = false
 		MakeCorner(CopyBtn, UDim.new(0, 5))
 		MakeEdge(CopyBtn, Theme.AccentDim, 1)
@@ -5299,11 +5939,11 @@ function UILib.CreateCode(Parent, Options)
 		CopyBtn.MouseButton1Click:Connect(function()
 			if setclipboard then
 				pcall(setclipboard, Options.Text or "")
-				CopyBtn.Text       = "Copied"
+				SetUiText(CopyBtn, "Copied", "copied")
 				CopyBtn.TextColor3 = Theme.Success
 				task.delay(1, function()
 					if not CopyBtn.Parent then return end
-					CopyBtn.Text       = "Copy"
+					SetUiText(CopyBtn, "Copy", "copy")
 					CopyBtn.TextColor3 = Theme.TextMuted
 				end)
 			end
@@ -5357,7 +5997,7 @@ end
 --
 -- Returns: { Frame, Image, SetImage(id) }
 -- ============================================================
-function UILib.CreateImage(Parent, Options)
+function Skibidi.CreateImage(Parent, Options)
 	Options = Options or {}
 	local h = Options.Height or 150
 
@@ -5397,7 +6037,7 @@ end
 --
 -- Returns: { Frame, Video, Play(), Pause() }
 -- ============================================================
-function UILib.CreateVideo(Parent, Options)
+function Skibidi.CreateVideo(Parent, Options)
 	Options = Options or {}
 	local h = Options.Height or 180
 
@@ -5432,14 +6072,15 @@ function UILib.CreateVideo(Parent, Options)
 	PlayBtn.Font             = Theme.FontMedium
 	PlayBtn.TextSize         = Theme.SmallSize
 	PlayBtn.TextColor3       = Theme.TextPrimary
-	PlayBtn.Text             = "Play"
+	SetUiText(PlayBtn, "Play", "play")
 	PlayBtn.AutoButtonColor  = false
 	MakeCorner(PlayBtn, UDim.new(0, 5))
 	MakeEdge(PlayBtn, Theme.AccentDim, 1)
 	MakeGloss(PlayBtn, 0.10)
 
 	local function updateBtn()
-		PlayBtn.Text = Vid.Playing and "Pause" or "Play"
+		if Vid.Playing then SetUiText(PlayBtn, "Pause", "pause")
+		else SetUiText(PlayBtn, "Play", "play") end
 	end
 
 	local function Play() Vid:Play(); updateBtn() end
@@ -5466,7 +6107,7 @@ end
 --
 -- Returns: { Frame, Viewport, Camera, SetModel(instance) }
 -- ============================================================
-function UILib.CreateViewport(Parent, Options)
+function Skibidi.CreateViewport(Parent, Options)
 	Options = Options or {}
 	local h = Options.Height or 180
 
@@ -5543,7 +6184,7 @@ end
 --   Icon       string   Lucide icon before the label (optional)
 -- Returns: { Frame, SetOpen(bool), SetValue(color3), GetValue() }
 -- ============================================================
-function UILib.CreateColorPicker(Parent, Options)
+function Skibidi.CreateColorPicker(Parent, Options)
 	Options = Options or {}
 	local current = Options.Default or Color3.fromRGB(255, 255, 255)
 	local h, s, v = Color3.toHSV(current)
@@ -5578,7 +6219,7 @@ function UILib.CreateColorPicker(Parent, Options)
 	Lbl.TextSize               = Theme.BodySize
 	Lbl.TextColor3             = Theme.TextPrimary
 	Lbl.TextXAlignment         = Enum.TextXAlignment.Left
-	Lbl.Text                   = Options.Label or ""
+	SetText(Lbl, Options.Label or "")
 	if Options.Icon then PrefixIcon(Lbl, Options.Icon, 14, Theme.TextPrimary) end
 
 	local Swatch = Instance.new("Frame", Head)
@@ -5796,16 +6437,18 @@ end
 -- Init
 -- Optional bootstrap call. Lets you override theme values and
 -- set a default Parent for future CreatePanel calls in one go,
--- without having to reach into UILib.Theme directly.
+-- without having to reach into Skibidi.Theme directly.
 --
 -- Options:
---   Theme    table      Partial theme override, merged into UILib.Theme
---   Parent   Instance   Default parent for new panels (default PlayerGui)
+--   Theme         table     Partial theme override, merged into Skibidi.Theme
+--   Parent        Instance  Default parent for new panels (default PlayerGui)
+--   Localization  table     Passed straight to Skibidi.Localization
+--   Language      string    Language to start in (default: system locale)
 --
--- Returns: UILib (so calls can be chained, e.g.
---   UILib.Init({ Theme = { Accent = Color3.fromRGB(120,80,220) } }).CreatePanel({...})
+-- Returns: Skibidi (so calls can be chained, e.g.
+--   Skibidi.Init({ Theme = { Accent = Color3.fromRGB(120,80,220) } }).CreatePanel({...})
 -- ============================================================
-function UILib.Init(Options)
+function Skibidi.Init(Options)
 	Options = Options or {}
 	if Options.Theme then
 		for k, val in pairs(Options.Theme) do
@@ -5815,7 +6458,13 @@ function UILib.Init(Options)
 	if Options.Parent then
 		DefaultParent = Options.Parent
 	end
-	return UILib
+	if Options.Localization then
+		Skibidi.Localization(Options.Localization)
+	end
+	if Options.Language then
+		Skibidi.SetLanguage(Options.Language)
+	end
+	return Skibidi
 end
 
 -- ============================================================
@@ -5827,13 +6476,13 @@ end
 -- are completely unaffected.
 --
 -- To opt a component in, give it a Flag key at creation:
---   UILib.CreateToggle(tab, { Label = "ESP", Flag = "esp", ... })
+--   Skibidi.CreateToggle(tab, { Label = "ESP", Flag = "esp", ... })
 -- Supported: Toggle (bool), Slider (number), TextInput (string),
 -- Dropdown (string / array if Multi), Keybind (key name string),
 -- ColorPicker (RGB table), Group (index), InputList (array).
 --
---   UILib.SaveConfig(name)  → true  |  false, err
---   UILib.LoadConfig(name)  → true  |  false, err
+--   Skibidi.SaveConfig(name)  → true  |  false, err
+--   Skibidi.LoadConfig(name)  → true  |  false, err
 --
 -- `name` defaults to "UILibConfig"; files are stored as
 -- "<name>.json" in the executor's workspace folder. Loading
@@ -5844,7 +6493,7 @@ local function configFileName(name)
 	return tostring(name or "UILibConfig") .. ".json"
 end
 
-function UILib.SaveConfig(name)
+function Skibidi.SaveConfig(name)
 	if type(writefile) ~= "function" then
 		return false, "writefile is not supported by this executor"
 	end
@@ -5869,7 +6518,7 @@ function UILib.SaveConfig(name)
 	return true
 end
 
-function UILib.LoadConfig(name)
+function Skibidi.LoadConfig(name)
 	if type(readfile) ~= "function" then
 		return false, "readfile is not supported by this executor"
 	end
@@ -5911,7 +6560,7 @@ end
 --
 -- Returns: { Frame, Label, SetText(text) }
 -- ============================================================
-function UILib.CreateLabel(Parent, Options)
+function Skibidi.CreateLabel(Parent, Options)
 	Options = Options or {}
 
 	local Lbl = Instance.new("TextLabel")
@@ -5923,14 +6572,14 @@ function UILib.CreateLabel(Parent, Options)
 	Lbl.TextColor3             = Options.Color or Theme.TextMuted
 	Lbl.TextXAlignment         = Options.Alignment or Enum.TextXAlignment.Left
 	Lbl.TextTruncate           = Enum.TextTruncate.AtEnd
-	Lbl.Text                   = Options.Text or ""
+	SetText(Lbl, Options.Text or "")
 	Lbl.Parent                 = Parent
 	if Options.Icon then PadIcon(Lbl, Options.Icon, 14, Lbl.TextColor3) end
 
 	return {
 		Frame   = Lbl,
 		Label   = Lbl,
-		SetText = function(t) Lbl.Text = t or "" end,
+		SetText = function(t) SetText(Lbl, t or "") end,
 	}
 end
 
@@ -5947,7 +6596,7 @@ end
 --   Icon       string   Lucide icon before the label (optional)
 -- Returns: { Frame, SetValue(v), SetLabel(t), GetValue() }
 -- ============================================================
-function UILib.CreateKeyValue(Parent, Options)
+function Skibidi.CreateKeyValue(Parent, Options)
 	Options = Options or {}
 	local value = Options.Value ~= nil and tostring(Options.Value) or "-"
 
@@ -5969,7 +6618,7 @@ function UILib.CreateKeyValue(Parent, Options)
 	KeyLbl.TextColor3             = Theme.TextMuted
 	KeyLbl.TextXAlignment         = Enum.TextXAlignment.Left
 	KeyLbl.TextTruncate           = Enum.TextTruncate.AtEnd
-	KeyLbl.Text                   = Options.Label or ""
+	SetText(KeyLbl, Options.Label or "")
 	if Options.Icon then PrefixIcon(KeyLbl, Options.Icon, 14, Theme.TextMuted) end
 
 	local ValLbl = Instance.new("TextLabel", Row)
@@ -5981,7 +6630,7 @@ function UILib.CreateKeyValue(Parent, Options)
 	ValLbl.TextColor3             = Theme.AccentSec
 	ValLbl.TextXAlignment         = Enum.TextXAlignment.Right
 	ValLbl.TextTruncate           = Enum.TextTruncate.AtEnd
-	ValLbl.Text                   = value
+	SetText(ValLbl, value)
 
 	-- A stat row is read in bulk, so it gets a marker rather than a
 	-- border: the eye can run down a column of ticks far faster than it
@@ -6013,14 +6662,14 @@ function UILib.CreateKeyValue(Parent, Options)
 		Frame    = Row,
 		SetValue = function(v)
 			value = tostring(v)
-			ValLbl.Text = value
+			SetText(ValLbl, value)
 			-- A value that just changed should say so; the flash decays
 			-- back to the resting colour on its own.
 			ValLbl.TextColor3 = Lighten(Theme.AccentSec, 0.2)
 			TweenService:Create(ValLbl, TweenSoft,
 				{ TextColor3 = Theme.AccentSec }):Play()
 		end,
-		SetLabel = function(t) KeyLbl.Text = t or "" end,
+		SetLabel = function(t) SetText(KeyLbl, t or "") end,
 		GetValue = function() return value end,
 	}
 end
@@ -6030,7 +6679,7 @@ end
 -- Destroys every panel, notification and tooltip the library has
 -- created and clears internal state. Safe to call multiple times.
 -- ============================================================
-function UILib.Unload()
+function Skibidi.Unload()
 	for _, g in ipairs(_allGuis) do
 		if g and g.Parent then g:Destroy() end
 	end
@@ -6042,6 +6691,8 @@ function UILib.Unload()
 	if _overlayWatch then _overlayWatch:Disconnect(); _overlayWatch = nil end
 	_openOverlay = nil
 	for k in pairs(Flags) do Flags[k] = nil end
+	for obj in pairs(LocObjects) do LocObjects[obj] = nil end
+	for i = #LocListeners, 1, -1 do LocListeners[i] = nil end
 end
 
 -- ============================================================
@@ -6050,31 +6701,37 @@ end
 -- primary CreateXxx API, without altering how the components
 -- themselves are implemented.
 -- ============================================================
-UILib.init        = UILib.Init
-UILib.unload      = UILib.Unload
-UILib.saveconfig  = UILib.SaveConfig
-UILib.loadconfig  = UILib.LoadConfig
-UILib.notify      = UILib.ShowNotification
-UILib.label       = UILib.CreateLabel
-UILib.keyvalue    = UILib.CreateKeyValue
-UILib.button      = UILib.CreateButton
-UILib.code        = UILib.CreateCode
-UILib.colorpicker = UILib.CreateColorPicker
-UILib.divider     = UILib.CreateDivider
-UILib.dropdown    = UILib.CreateDropdown
-UILib.group       = UILib.CreateGroup
-UILib.hstack      = UILib.CreateHStack
-UILib.image       = UILib.CreateImage
-UILib.input       = UILib.CreateTextInput
-UILib.keybind     = UILib.CreateKeybind
-UILib.paragraph   = UILib.CreateParagraph
-UILib.progressbar = UILib.CreateProgressBar
-UILib.section     = UILib.CreateSection
-UILib.slider      = UILib.CreateSlider
-UILib.space       = UILib.CreateSpace
-UILib.toggle      = UILib.CreateToggle
-UILib.vstack      = UILib.CreateVStack
-UILib.video       = UILib.CreateVideo
-UILib.viewport    = UILib.CreateViewport
+Skibidi.init        = Skibidi.Init
+Skibidi.unload      = Skibidi.Unload
+Skibidi.saveconfig  = Skibidi.SaveConfig
+Skibidi.loadconfig  = Skibidi.LoadConfig
+Skibidi.notify      = Skibidi.ShowNotification
+Skibidi.localization   = Skibidi.Localization
+Skibidi.setlanguage    = Skibidi.SetLanguage
+Skibidi.getlanguage    = Skibidi.GetLanguage
+Skibidi.getlanguages   = Skibidi.GetLanguages
+Skibidi.addtranslations = Skibidi.AddTranslations
+Skibidi.translate      = Skibidi.Translate
+Skibidi.label       = Skibidi.CreateLabel
+Skibidi.keyvalue    = Skibidi.CreateKeyValue
+Skibidi.button      = Skibidi.CreateButton
+Skibidi.code        = Skibidi.CreateCode
+Skibidi.colorpicker = Skibidi.CreateColorPicker
+Skibidi.divider     = Skibidi.CreateDivider
+Skibidi.dropdown    = Skibidi.CreateDropdown
+Skibidi.group       = Skibidi.CreateGroup
+Skibidi.hstack      = Skibidi.CreateHStack
+Skibidi.image       = Skibidi.CreateImage
+Skibidi.input       = Skibidi.CreateTextInput
+Skibidi.keybind     = Skibidi.CreateKeybind
+Skibidi.paragraph   = Skibidi.CreateParagraph
+Skibidi.progressbar = Skibidi.CreateProgressBar
+Skibidi.section     = Skibidi.CreateSection
+Skibidi.slider      = Skibidi.CreateSlider
+Skibidi.space       = Skibidi.CreateSpace
+Skibidi.toggle      = Skibidi.CreateToggle
+Skibidi.vstack      = Skibidi.CreateVStack
+Skibidi.video       = Skibidi.CreateVideo
+Skibidi.viewport    = Skibidi.CreateViewport
 
-return UILib
+return Skibidi
