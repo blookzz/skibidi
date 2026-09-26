@@ -2,6 +2,10 @@
 -- Skibidi UI  |  Self-contained loadstring library (skibidi edition)
 -- Usage:
 -- local Skibidi = loadstring(game:HttpGet("https://raw.githubusercontent.com/blookzz/skibidi/refs/heads/main/UILib.lua"))()
+--
+-- Translation: any label can be a "loc:key" instead of literal text once
+-- Skibidi.Localization({ Translations = { ... } }) has been called; see the
+-- LOCALIZATION section below.
 -- ============================================================
 
 local Skibidi = {}
@@ -21,6 +25,364 @@ local RunService       = game:GetService("RunService")
 local Players          = game:GetService("Players")
 local LocalPlayer      = Players.LocalPlayer
 local PlayerGui        = LocalPlayer:WaitForChild("PlayerGui")
+-- ============================================================
+-- LOCALIZATION  (translate)
+-- Any string handed to a control can be a *translation key*
+-- instead of literal text. A key is written with the prefix
+-- ("loc:" by default); everything without the prefix is left
+-- exactly as it was, so a script that never calls
+-- Skibidi.Localization behaves identically to before.
+--
+--   Skibidi.Localization({
+--       Translations = {
+--           en = { title = "Settings", play = "Play" },
+--           es = { title = "Ajustes",  play = "Jugar" },
+--       },
+--   })
+--   Skibidi.CreateButton(tab, { Text = "loc:play" })
+--   Skibidi.SetLanguage("es")   -- every live label re-renders
+--
+-- Options (all optional):
+--   Enabled          bool    Default true when Localization is called
+--   Prefix           string  Default "loc:"
+--   Language         string  Default the player's system locale
+--   DefaultLanguage  string  Fallback table, default "en"
+--   ShowMissing      bool    Default true — a key with no string
+--                            renders as "[key]" instead of "key"
+--   Translations     table   { [language] = { [key] = string } }
+--
+-- Labels are registered as they are created, so the language can
+-- be set before or after the UI is built; both end up correct.
+--
+-- API:
+--   Skibidi.Localization(options)        turn it on / reconfigure
+--   Skibidi.SetLanguage("es")            re-renders every live label
+--   Skibidi.GetLanguage()  GetLanguages()
+--   Skibidi.AddTranslations("es", { ... })
+--   Skibidi.Translate("loc:play")        resolve a key yourself
+--   Skibidi.SetTranslationKey(label, "loc:play")
+--   Skibidi.OnLanguageChanged(fn)        returns a disconnect
+--   Skibidi.IsLocalized()
+--
+-- The library's own wording is reachable under reserved "ui." keys,
+-- and stays English when a table leaves them out:
+--   ui.search  ui.select  ui.none  ui.listening  ui.confirm
+--   ui.copy    ui.copied  ui.clear_log  ui.play   ui.pause
+--   ui.close   ui.cancel  ui.close_title  ui.close_message
+-- ============================================================
+local Loc = {
+	Enabled         = false,
+	Prefix          = "loc:",
+	Language        = "en",
+	LocaleId        = "en-us",
+	DefaultLanguage = "en",
+	ShowMissing     = true,
+	Translations    = {},
+}
+
+-- The player's own locale is the starting language, so a script
+-- that ships an "es" table serves Spanish players without asking.
+do
+	local ok, id = pcall(function()
+		return game:GetService("LocalizationService").SystemLocaleId
+	end)
+	if ok and type(id) == "string" and id ~= "" then
+		Loc.LocaleId = string.lower(id)
+		Loc.Language = string.match(Loc.LocaleId, "^[a-z]+") or Loc.LocaleId
+	end
+end
+
+-- obj -> { Parented = bool, Props = { [property] = { Key, Raw, Transform } } }
+local LocObjects   = {}
+local LocListeners = {}
+local _locSinceSweep = 0
+
+-- "pt-br" should find a "pt-br" table, then a "pt" one. Matching
+-- the region first is what lets a script ship both without the
+-- broader table swallowing the narrower one.
+local function langTable(lang)
+	if type(lang) ~= "string" or lang == "" then return nil end
+	local T = Loc.Translations
+	if type(T) ~= "table" then return nil end
+	local lower = string.lower(lang)
+	return T[lang] or T[lower] or T[string.match(lower, "^[a-z]+") or ""]
+end
+
+local function lookupKey(key)
+	local t = langTable(Loc.Language)
+	local v = t and t[key]
+	if type(v) == "string" then return v end
+	t = langTable(Loc.DefaultLanguage)
+	v = t and t[key]
+	if type(v) == "string" then return v end
+	return nil
+end
+
+-- Returns the key behind a prefixed string, or nil for plain text.
+local function matchKey(text)
+	local p = Loc.Prefix
+	if type(text) ~= "string" or p == "" or #text <= #p then return nil end
+	if string.sub(text, 1, #p) ~= p then return nil end
+	return string.sub(text, #p + 1)
+end
+
+-- The string a registered label should be showing right now.
+local function resolved(entry)
+	if not Loc.Enabled then return entry.Raw end
+	local text = lookupKey(entry.Key)
+	if text then return text end
+	-- The library's own chrome carries its English wording as a fallback,
+	-- so an untranslated "ui.copy" reads "Copy" rather than "[ui.copy]".
+	if entry.Fallback ~= nil then return entry.Fallback end
+	return Loc.ShowMissing and ("[" .. entry.Key .. "]") or entry.Key
+end
+
+local function writeProp(obj, prop, text)
+	local ok = pcall(function() obj[prop] = text end)
+	return ok
+end
+
+-- A label whose instance has been destroyed stops being our
+-- problem; sweeping on a counter keeps that bookkeeping off the
+-- hot path. Objects are only dropped once they have been seen
+-- parented, so registering before :Parent is assigned is safe.
+local function sweepLocObjects()
+	for obj, rec in pairs(LocObjects) do
+		local ok, parent = pcall(function() return obj.Parent end)
+		if not ok then
+			LocObjects[obj] = nil
+		elseif parent ~= nil then
+			rec.Parented = true
+		elseif rec.Parented then
+			LocObjects[obj] = nil
+		end
+	end
+	for i = #LocListeners, 1, -1 do
+		local l = LocListeners[i]
+		if l.Guard then
+			local ok, parent = pcall(function() return l.Guard.Parent end)
+			if not ok or parent == nil then table.remove(LocListeners, i) end
+		end
+	end
+end
+
+local function register(obj, prop, key, raw, transform, fallback)
+	local rec = LocObjects[obj]
+	if not rec then
+		rec = { Parented = false, Props = {} }
+		LocObjects[obj] = rec
+		_locSinceSweep = _locSinceSweep + 1
+		if _locSinceSweep >= 64 then
+			_locSinceSweep = 0
+			sweepLocObjects()
+		end
+	end
+	local entry = rec.Props[prop]
+	if entry then
+		entry.Key, entry.Raw, entry.Transform, entry.Fallback = key, raw, transform, fallback
+	else
+		entry = { Key = key, Raw = raw, Transform = transform, Fallback = fallback }
+		rec.Props[prop] = entry
+	end
+	return entry
+end
+
+local function unregister(obj, prop)
+	local rec = LocObjects[obj]
+	if not rec then return end
+	rec.Props[prop] = nil
+	if next(rec.Props) == nil then LocObjects[obj] = nil end
+end
+
+-- The one call every text-carrying control goes through. `text` is
+-- either a translation key or plain text; `transform` is applied
+-- *after* translation (upper-casing, padding), so a key survives the
+-- decoration a label wants to put around it. Returns what was shown.
+local function SetTextProp(obj, prop, text, transform)
+	if type(text) ~= "string" then
+		text = text == nil and "" or tostring(text)
+	end
+	local key = matchKey(text)
+	local out
+	if key then
+		local entry = register(obj, prop, key, text, transform)
+		out = resolved(entry)
+	else
+		unregister(obj, prop)
+		out = text
+	end
+	if transform then out = transform(out) end
+	return out, writeProp(obj, prop, out)
+end
+
+-- Resolves a prefixed key inside a string a control assembles by hand.
+-- Prefix-only on purpose: a dropdown option called "play" is an option
+-- called "play", not a translation key that happens to collide.
+local function TranslateText(text)
+	local key = matchKey(text)
+	if not key or not Loc.Enabled then return text end
+	local v = lookupKey(key)
+	if v then return v end
+	return Loc.ShowMissing and ("[" .. key .. "]") or key
+end
+
+local function SetText(obj, text, transform)
+	return SetTextProp(obj, "Text", text, transform)
+end
+
+local function SetPlaceholder(obj, text)
+	return SetTextProp(obj, "PlaceholderText", text)
+end
+
+-- The library's own wording ("Copy", "Clear Log", "None", …) reads from a
+-- reserved "ui.<key>" entry when the loaded table defines one and stays
+-- English otherwise. A script translates the whole window without having
+-- to hand-label the parts it never wrote.
+local function SetUiTextProp(obj, prop, text, key)
+	local entry = register(obj, prop, "ui." .. key, text, nil, text)
+	local out = resolved(entry)
+	return out, writeProp(obj, prop, out)
+end
+
+local function SetUiText(obj, text, key)
+	return SetUiTextProp(obj, "Text", text, key)
+end
+
+-- Script-supplied text when there is any, the library's own otherwise.
+local function SetTextOr(obj, text, fallback, key)
+	if type(text) == "string" and text ~= "" then return SetText(obj, text) end
+	return SetUiText(obj, fallback, key)
+end
+
+-- Re-renders every registered label and fires every listener.
+local function UpdateLang()
+	sweepLocObjects()
+	for obj, rec in pairs(LocObjects) do
+		for prop, entry in pairs(rec.Props) do
+			local out = resolved(entry)
+			if entry.Transform then out = entry.Transform(out) end
+			writeProp(obj, prop, out)
+		end
+	end
+	for _, l in ipairs(LocListeners) do
+		pcall(l.Fn, Loc.Language)
+	end
+end
+
+-- Internal: a control whose text is assembled from several pieces
+-- (the dropdown's "a, b, c" summary) re-runs its own refresh here
+-- instead of registering a label it does not own outright.
+local function BindLang(guard, fn)
+	local l = { Fn = fn, Guard = guard }
+	table.insert(LocListeners, l)
+	return function()
+		for i = #LocListeners, 1, -1 do
+			if LocListeners[i] == l then table.remove(LocListeners, i) end
+		end
+	end
+end
+
+-- Colon calls (Skibidi:SetLanguage"es") and dot calls both work.
+local function unself(...)
+	if (select(1, ...)) == Skibidi then return select(2, ...) end
+	return ...
+end
+
+-- ------------------------------------------------------------
+-- Public API
+-- ------------------------------------------------------------
+
+-- Turns translation on and returns the live config table.
+function Skibidi.Localization(...)
+	local Options = unself(...) or {}
+	if type(Options) ~= "table" then Options = {} end
+	if Options.Prefix          then Loc.Prefix          = Options.Prefix end
+	if Options.DefaultLanguage then Loc.DefaultLanguage = Options.DefaultLanguage end
+	if Options.Language        then Loc.Language        = Options.Language end
+	if type(Options.Translations) == "table" then
+		Loc.Translations = Options.Translations
+	end
+	if Options.ShowMissing ~= nil then Loc.ShowMissing = Options.ShowMissing == true end
+	-- Calling this at all means "translate"; Enabled = false is how
+	-- you keep a configured table switched off.
+	Loc.Enabled = Options.Enabled ~= false
+	UpdateLang()
+	return Loc
+end
+
+-- Merges one language's strings in, creating the table if needed.
+function Skibidi.AddTranslations(...)
+	local lang, tbl = unself(...)
+	if type(lang) ~= "string" or type(tbl) ~= "table" then return false end
+	local T = Loc.Translations[lang]
+	if type(T) ~= "table" then
+		T = {}
+		Loc.Translations[lang] = T
+	end
+	for k, v in pairs(tbl) do T[k] = v end
+	UpdateLang()
+	return true
+end
+
+function Skibidi.SetLanguage(...)
+	local lang = unself(...)
+	if type(lang) ~= "string" or lang == "" then return false end
+	Loc.Language = lang
+	UpdateLang()
+	return true
+end
+
+function Skibidi.GetLanguage()
+	return Loc.Language
+end
+
+-- Every language the loaded tables can serve, sorted.
+function Skibidi.GetLanguages()
+	local out = {}
+	for lang in pairs(Loc.Translations) do table.insert(out, lang) end
+	table.sort(out)
+	return out
+end
+
+-- Resolves a key (prefixed or bare) to its string. Plain text with
+-- no matching key comes back untouched, so it is safe to wrap any
+-- string a script is about to print.
+function Skibidi.Translate(...)
+	local text = unself(...)
+	if type(text) ~= "string" then return text end
+	local key = matchKey(text)
+	if key then
+		if not Loc.Enabled then return text end
+		local v = lookupKey(key)
+		if v then return v end
+		return Loc.ShowMissing and ("[" .. key .. "]") or key
+	end
+	if Loc.Enabled then
+		local v = lookupKey(text)
+		if v then return v end
+	end
+	return text
+end
+
+-- Re-points an existing label at another key (or plain text).
+function Skibidi.SetTranslationKey(...)
+	local obj, text, prop = unself(...)
+	if obj == nil or type(text) ~= "string" then return false end
+	local _, ok = SetTextProp(obj, prop or "Text", text)
+	return ok == true
+end
+
+-- fn(language) on every language change. Returns a disconnect.
+function Skibidi.OnLanguageChanged(...)
+	local fn = unself(...)
+	if type(fn) ~= "function" then return function() end end
+	return BindLang(nil, fn)
+end
+
+function Skibidi.IsLocalized()
+	return Loc.Enabled
+end
+
 
 -- ============================================================
 -- THEME  (matches the gold/dark reference style by default)
@@ -1045,7 +1407,7 @@ local function AttachTooltip(target, text)
 	if not text or text == "" then return end
 	target.MouseEnter:Connect(function()
 		_ensureTooltip()
-		_tooltipLbl.Text      = text
+		SetText(_tooltipLbl, text)
 		_tooltipFrame.Visible = true
 		_positionTooltip()
 	end)
@@ -1875,7 +2237,7 @@ function Skibidi.CreatePanel(Options)
 	TitleLabel.TextColor3             = Theme.AccentSec
 	TitleLabel.TextXAlignment         = Enum.TextXAlignment.Left
 	TitleLabel.TextTruncate           = Enum.TextTruncate.AtEnd
-	TitleLabel.Text                   = Options.Title or ""
+	SetText(TitleLabel, Options.Title or "")
 	TitleLabel.ZIndex                 = 3
 	TitleLabel.Parent                 = Header
 
@@ -1889,8 +2251,10 @@ function Skibidi.CreatePanel(Options)
 	end
 
 	-- Optional subtitle, rendered as a rounded muted pill after the title
-	local plainTitle    = Options.Title    or ""
-	local plainSubTitle = Options.SubTitle or ""
+	-- Both are read back off the label rather than out of Options, so a
+	-- translated title is what the minimize logic measures.
+	local plainTitle    = TitleLabel.Text
+	local plainSubTitle = TranslateText(Options.SubTitle or "")
 	local SubPill, SubLabel
 
 	local function measureText(str, size, font)
@@ -1923,7 +2287,7 @@ function Skibidi.CreatePanel(Options)
 		SubLabel.TextSize               = Theme.CaptionSize
 		SubLabel.TextColor3             = Theme.TextMuted
 		SubLabel.TextXAlignment         = Enum.TextXAlignment.Left
-		SubLabel.Text                   = plainSubTitle
+		SetText(SubLabel, Options.SubTitle or "")
 		SubLabel.ZIndex                 = 4
 		SubLabel.Parent                 = SubPill
 	end
@@ -2143,7 +2507,7 @@ function Skibidi.CreatePanel(Options)
 		SearchBox.Font                   = Theme.FontMedium
 		SearchBox.TextSize               = Theme.SmallSize
 		SearchBox.TextColor3             = Theme.TextPrimary
-		SearchBox.PlaceholderText        = "Search…"
+		SetUiTextProp(SearchBox, "PlaceholderText", "Search…", "search")
 		SearchBox.PlaceholderColor3      = Theme.TextMuted
 		SearchBox.TextXAlignment         = Enum.TextXAlignment.Left
 		SearchBox.TextTruncate           = Enum.TextTruncate.AtEnd
@@ -2206,7 +2570,7 @@ function Skibidi.CreatePanel(Options)
 			btn.Font              = Theme.FontMedium
 			btn.TextSize          = Theme.SmallSize
 			btn.TextColor3        = Theme.TextMuted
-			btn.Text              = "  " .. name .. "  "
+			SetText(btn, name, function(s) return "  " .. s .. "  " end)
 			btn.ZIndex            = 3
 			btn.Parent            = TabBar
 			MakeCorner(btn, UDim.new(0, 7))
@@ -2296,7 +2660,7 @@ function Skibidi.CreatePanel(Options)
 			btn.TextColor3        = Theme.TextMuted
 			btn.TextXAlignment    = Enum.TextXAlignment.Left
 			btn.TextTruncate      = Enum.TextTruncate.AtEnd
-			btn.Text              = name
+			SetText(btn, name)
 			btn.ZIndex            = 3
 			btn.Parent            = TabBar
 			MakeCorner(btn, UDim.new(0, 7))
@@ -2952,7 +3316,7 @@ function Skibidi.CreatePanel(Options)
 		Title.TextSize               = Theme.TitleSize
 		Title.TextColor3             = Theme.TextPrimary
 		Title.TextXAlignment         = Enum.TextXAlignment.Left
-		Title.Text                   = Options.CloseTitle or "Close panel?"
+		SetTextOr(Title, Options.CloseTitle, "Close panel?", "close_title")
 		Title.ZIndex                 = 102
 		Title.Parent                 = Card
 
@@ -2966,12 +3330,12 @@ function Skibidi.CreatePanel(Options)
 		Body.TextWrapped            = true
 		Body.TextXAlignment         = Enum.TextXAlignment.Left
 		Body.TextYAlignment         = Enum.TextYAlignment.Top
-		Body.Text                   = Options.CloseMessage
-			or "Are you sure? Everything in this window will be closed."
+		SetTextOr(Body, Options.CloseMessage,
+			"Are you sure? Everything in this window will be closed.", "close_message")
 		Body.ZIndex                 = 102
 		Body.Parent                 = Card
 
-		local function MakeDialogButton(text, x, w, bg, bgAlpha, fg, edge)
+		local function MakeDialogButton(text, uiKey, x, w, bg, bgAlpha, fg, edge)
 			local B = Instance.new("TextButton")
 			B.Size                   = UDim2.new(0, w, 0, 28)
 			B.AnchorPoint            = Vector2.new(1, 1)
@@ -2982,7 +3346,7 @@ function Skibidi.CreatePanel(Options)
 			B.Font                   = Theme.FontMedium
 			B.TextSize               = Theme.SmallSize
 			B.TextColor3             = fg
-			B.Text                   = text
+			SetUiText(B, text, uiKey)
 			B.AutoButtonColor        = false
 			B.ZIndex                 = 102
 			B.Parent                 = Card
@@ -3009,8 +3373,8 @@ function Skibidi.CreatePanel(Options)
 			return B
 		end
 
-		local YesBtn = MakeDialogButton("Close",  -14,        76, Theme.Danger, 0.12, Color3.new(1, 1, 1), Theme.Danger)
-		local NoBtn  = MakeDialogButton("Cancel", -14 - 76 - 6, 76, Theme.Bg2, 0, Theme.TextPrimary, Accent)
+		local YesBtn = MakeDialogButton("Close",  "close",  -14,        76, Theme.Danger, 0.12, Color3.new(1, 1, 1), Theme.Danger)
+		local NoBtn  = MakeDialogButton("Cancel", "cancel", -14 - 76 - 6, 76, Theme.Bg2, 0, Theme.TextPrimary, Accent)
 
 		-- Pop in: dimmer darkens, card scales up from 0.82 while its
 		-- contents fade in from fully transparent.
@@ -3178,8 +3542,7 @@ function Skibidi.CreatePanel(Options)
 		GetActiveTab = function() return activeTab end,
 		GetTabButton = function(i) return TabBtns and TabBtns[i] end,
 		SetTitle     = function(t)
-			plainTitle      = t or ""
-			TitleLabel.Text = plainTitle
+			plainTitle      = SetText(TitleLabel, t or "")
 			layoutTitle()
 			if isMinimized then
 				Frame.Size = UDim2.new(0, computeMinimizedWidth(), 0, HEADER_H)
@@ -3187,8 +3550,7 @@ function Skibidi.CreatePanel(Options)
 		end,
 		SetSubTitle  = function(t)
 			if not SubLabel then return end
-			plainSubTitle  = t or ""
-			SubLabel.Text  = plainSubTitle
+			plainSubTitle  = SetText(SubLabel, t or "")
 			SubPill.Visible = plainSubTitle ~= ""
 			layoutTitle()
 			if isMinimized then
@@ -3290,7 +3652,7 @@ function Skibidi.CreateSection(Parent, Options)
 	TitleLbl.TextSize               = Theme.SmallSize + 1
 	TitleLbl.TextColor3             = Theme.Accent
 	TitleLbl.TextXAlignment         = Enum.TextXAlignment.Left
-	TitleLbl.Text                   = title
+	SetText(TitleLbl, title)
 
 	local SecIcon = Options.Icon and PrefixIcon(TitleLbl, Options.Icon, 14, Theme.Accent) or nil
 
@@ -3366,7 +3728,7 @@ function Skibidi.CreateSection(Parent, Options)
 		Content  = Content,
 		SetOpen  = SetOpen,
 		IsOpen   = function() return isOpen end,
-		SetTitle = function(t) TitleLbl.Text = t or "" end,
+		SetTitle = function(t) SetText(TitleLbl, t or "") end,
 		SetIcon  = function(spec)
 			if SecIcon then
 				SetIconImage(SecIcon, spec)
@@ -3423,7 +3785,7 @@ function Skibidi.CreateButton(Parent, Options)
 	Btn.TextSize               = Theme.BodySize
 	Btn.TextColor3             = Options.TextColor or Theme.TextPrimary
 	Btn.TextXAlignment         = Enum.TextXAlignment.Center
-	Btn.Text                   = Options.Text or ""
+	SetText(Btn, Options.Text or "")
 	Btn.AutoButtonColor        = false
 	Btn.Parent                 = RowBg
 
@@ -3513,7 +3875,7 @@ function Skibidi.CreateButton(Parent, Options)
 	local function disarm()
 		armed = false
 		armToken = armToken + 1
-		Btn.Text = baseText
+		SetText(Btn, baseText)
 		TweenService:Create(RowEdge, TweenFast,
 			{ Color = EdgeRest(), Transparency = Theme.StrokeAlpha or 0.34 }):Play()
 		TweenService:Create(Underline, TweenFast, { Size = UDim2.new(0, 0, 0, 2) }):Play()
@@ -3526,7 +3888,7 @@ function Skibidi.CreateButton(Parent, Options)
 			armed = true
 			armToken = armToken + 1
 			local myToken = armToken
-			Btn.Text = Options.ConfirmText or "Confirm?"
+			SetTextOr(Btn, Options.ConfirmText, "Confirm?", "confirm")
 			TweenService:Create(Btn, TweenFast, { TextColor3 = Theme.Warning }):Play()
 			if BtnIcon then TweenService:Create(BtnIcon, TweenFast, { ImageColor3 = Theme.Warning }):Play() end
 			TweenService:Create(RowEdge, TweenFast,
@@ -3561,7 +3923,7 @@ function Skibidi.CreateButton(Parent, Options)
 	return {
 		Frame       = RowBg,
 		Button      = Btn,
-		SetText     = function(t) baseText = t or ""; if not armed then Btn.Text = baseText end end,
+		SetText     = function(t) baseText = t or ""; if not armed then SetText(Btn, baseText) end end,
 		SetDisabled = SetDisabled,
 		SetIcon     = function(spec)
 			if BtnIcon then
@@ -3617,7 +3979,7 @@ function Skibidi.CreateToggle(Parent, Options)
 	Lbl.TextSize               = Theme.BodySize
 	Lbl.TextColor3             = Theme.TextPrimary
 	Lbl.TextXAlignment         = Enum.TextXAlignment.Left
-	Lbl.Text                   = Options.Label or ""
+	SetText(Lbl, Options.Label or "")
 	if Options.Icon then PrefixIcon(Lbl, Options.Icon, 14, Theme.TextPrimary) end
 
 	-- Track
@@ -3771,7 +4133,7 @@ function Skibidi.CreateTextInput(Parent, Options)
 	Lbl.TextSize               = Theme.BodySize
 	Lbl.TextColor3             = Theme.TextPrimary
 	Lbl.TextXAlignment         = Enum.TextXAlignment.Left
-	Lbl.Text                   = Options.Label or ""
+	SetText(Lbl, Options.Label or "")
 	if Options.Icon then PrefixIcon(Lbl, Options.Icon, 14, Theme.TextPrimary) end
 
 	local Box = Instance.new("TextBox", Row)
@@ -3783,7 +4145,7 @@ function Skibidi.CreateTextInput(Parent, Options)
 	Box.Font              = Theme.FontMedium
 	Box.TextSize          = Theme.SmallSize
 	Box.TextColor3        = Theme.AccentSec
-	Box.PlaceholderText   = Options.Placeholder or ""
+	SetPlaceholder(Box, Options.Placeholder or "")
 	Box.PlaceholderColor3 = Theme.TextMuted
 	Box.TextXAlignment    = Enum.TextXAlignment.Center
 	Box.ClearTextOnFocus  = false
@@ -3896,7 +4258,7 @@ function Skibidi.CreateSlider(Parent, Options)
 		Lbl.TextColor3       = Theme.TextPrimary
 		Lbl.TextXAlignment   = Enum.TextXAlignment.Left
 		Lbl.TextTruncate     = Enum.TextTruncate.AtEnd
-		Lbl.Text             = Options.Label
+		SetText(Lbl, Options.Label)
 		if Options.Icon then PrefixIcon(Lbl, Options.Icon, 14, Theme.TextPrimary) end
 	end
 
@@ -4066,7 +4428,7 @@ function Skibidi.CreateInputList(Parent, Options)
 	Lbl.TextSize               = Theme.BodySize
 	Lbl.TextColor3             = Theme.TextPrimary
 	Lbl.TextXAlignment         = Enum.TextXAlignment.Left
-	Lbl.Text                   = label
+	SetText(Lbl, label)
 	if Options.Icon then PrefixIcon(Lbl, Options.Icon, 14, Theme.TextPrimary) end
 
 	local Div = Instance.new("Frame", Card)
@@ -4132,7 +4494,7 @@ function Skibidi.CreateInputList(Parent, Options)
 		TB.Font               = Theme.FontMedium
 		TB.TextSize           = 11
 		TB.TextColor3         = Theme.TextPrimary
-		TB.PlaceholderText    = ph
+		SetPlaceholder(TB, ph)
 		TB.PlaceholderColor3  = Theme.TextMuted
 		TB.TextXAlignment     = Enum.TextXAlignment.Left
 		TB.ClearTextOnFocus   = false
@@ -4239,7 +4601,7 @@ function Skibidi.CreateStatusLog(Parent, Options)
 	ClearBtn.Font                   = Theme.FontMedium
 	ClearBtn.TextSize               = Theme.SmallSize
 	ClearBtn.TextColor3             = Theme.TextMuted
-	ClearBtn.Text                   = "Clear Log"
+	SetUiText(ClearBtn, "Clear Log", "clear_log")
 	ClearBtn.AutoButtonColor        = false
 	MakeRipple(ClearBtn, Theme.Accent, 6)
 
@@ -4373,7 +4735,7 @@ function Skibidi.CreateDivider(Parent, Options)
 	Cap.Font                   = Theme.FontMedium
 	Cap.TextSize               = Theme.CaptionSize
 	Cap.TextColor3             = Theme.Accent
-	Cap.Text                   = string.upper(Options.Text)
+	SetText(Cap, Options.Text, string.upper)
 	MakePadding(Cap, 10, 10, 1, 1)
 
 	return Holder
@@ -4492,7 +4854,7 @@ function Skibidi.ShowNotification(Title, Text, Duration, Icon)
 	TitleLbl.TextXAlignment         = Enum.TextXAlignment.Left
 	TitleLbl.TextTruncate           = Enum.TextTruncate.AtEnd
 	TitleLbl.ZIndex                 = 2
-	TitleLbl.Text                   = (Title or ""):upper()
+	SetText(TitleLbl, Title or "", string.upper)
 
 	local Lbl = Instance.new("TextLabel", F)
 	Lbl.Size                   = UDim2.new(1, textW, 0, 16)
@@ -4504,7 +4866,7 @@ function Skibidi.ShowNotification(Title, Text, Duration, Icon)
 	Lbl.TextXAlignment         = Enum.TextXAlignment.Left
 	Lbl.TextTruncate           = Enum.TextTruncate.AtEnd
 	Lbl.ZIndex                 = 2
-	Lbl.Text                   = Text or ""
+	SetText(Lbl, Text or "")
 
 	-- Countdown rule along the bottom: the banner shows how long it has
 	-- left instead of vanishing without warning.
@@ -4629,7 +4991,7 @@ function Skibidi.CreateParagraph(Parent, Options)
 		TitleLbl.TextXAlignment         = Enum.TextXAlignment.Left
 		TitleLbl.TextWrapped            = true
 		TitleLbl.LayoutOrder            = 0
-		TitleLbl.Text                   = Options.Title
+		SetText(TitleLbl, Options.Title)
 		if Options.Icon then
 			ParaIcon = PadIcon(TitleLbl, Options.Icon, 14, Theme.Accent)
 		end
@@ -4661,12 +5023,12 @@ function Skibidi.CreateParagraph(Parent, Options)
 	Body.TextYAlignment         = Enum.TextYAlignment.Top
 	Body.TextWrapped            = true
 	Body.LayoutOrder            = 2
-	Body.Text                   = Options.Content or Options.Text or ""
+	SetText(Body, Options.Content or Options.Text or "")
 
 	return {
 		Frame    = Card,
-		SetTitle = function(t) if TitleLbl then TitleLbl.Text = t end end,
-		SetText  = function(t) Body.Text = t end,
+		SetTitle = function(t) if TitleLbl then SetText(TitleLbl, t) end end,
+		SetText  = function(t) SetText(Body, t) end,
 		SetIcon  = function(spec)
 			if ParaIcon then
 				SetIconImage(ParaIcon, spec)
@@ -4720,7 +5082,7 @@ function Skibidi.CreateProgressBar(Parent, Options)
 	Lbl.TextColor3             = Theme.TextPrimary
 	Lbl.TextXAlignment         = Enum.TextXAlignment.Left
 	Lbl.TextTruncate           = Enum.TextTruncate.AtEnd
-	Lbl.Text                   = Options.Label or ""
+	SetText(Lbl, Options.Label or "")
 	if Options.Icon then PrefixIcon(Lbl, Options.Icon, 14, Theme.TextPrimary) end
 
 	local PctLbl = Instance.new("TextLabel", TopRow)
@@ -4773,7 +5135,7 @@ function Skibidi.CreateProgressBar(Parent, Options)
 		Frame    = Row,
 		Update   = Update,
 		GetValue = function() return cur end,
-		SetLabel = function(t) Lbl.Text = t or "" end,
+		SetLabel = function(t) SetText(Lbl, t or "") end,
 	}
 end
 
@@ -4909,7 +5271,7 @@ function Skibidi.CreateGroup(Parent, Options)
 		Lbl.TextColor3             = Theme.Accent
 		Lbl.TextXAlignment         = Enum.TextXAlignment.Left
 		Lbl.LayoutOrder            = 0
-		Lbl.Text                   = Options.Label
+		SetText(Lbl, Options.Label)
 	end
 
 	local rows = {}
@@ -4987,7 +5349,7 @@ function Skibidi.CreateGroup(Parent, Options)
 		Lbl.TextColor3             = Theme.TextPrimary
 		Lbl.TextXAlignment         = Enum.TextXAlignment.Left
 		Lbl.ZIndex                 = 2
-		Lbl.Text                   = text
+		SetText(Lbl, text)
 
 		rows[i] = { Row = Row, Tick = Tick, Dot = Dot, Ring = ring, Lbl = Lbl }
 
@@ -5100,7 +5462,7 @@ function Skibidi.CreateDropdown(Parent, Options)
 		Lbl.TextSize               = Theme.BodySize
 		Lbl.TextColor3             = Theme.TextPrimary
 		Lbl.TextXAlignment         = Enum.TextXAlignment.Left
-		Lbl.Text                   = Options.Label
+		SetText(Lbl, Options.Label)
 		if Options.Icon then PrefixIcon(Lbl, Options.Icon, 14, Theme.TextPrimary) end
 	end
 
@@ -5146,10 +5508,16 @@ function Skibidi.CreateDropdown(Parent, Options)
 	local function refreshLabel()
 		local out = {}
 		for _, val in ipairs(items) do
-			if selected[val] then table.insert(out, val) end
+			-- The summary shows the translated option names; GetValue and
+			-- OnChanged still speak in the raw values the script passed in.
+			if selected[val] then table.insert(out, TranslateText(val)) end
 		end
 		local any = #out > 0
-		ValueLbl.Text = any and table.concat(out, ", ") or (Options.Placeholder or "Select...")
+		if any then
+			SetText(ValueLbl, table.concat(out, ", "))
+		else
+			SetTextOr(ValueLbl, Options.Placeholder, "Select...", "select")
+		end
 		-- An empty select should look empty. Painting the placeholder in
 		-- the accent made "nothing chosen" read as a live value.
 		TweenService:Create(ValueLbl, TweenFast,
@@ -5256,7 +5624,7 @@ function Skibidi.CreateDropdown(Parent, Options)
 		RLbl.TextColor3             = selected[text] and Theme.ActiveTabText or Theme.TextPrimary
 		RLbl.TextXAlignment         = Enum.TextXAlignment.Left
 		RLbl.ZIndex                 = 2
-		RLbl.Text                   = text
+		SetText(RLbl, text)
 
 		optRows[text] = { Row = Row, Tick = Tick, Dot = Dot, Ring = ring,
 		                  Lbl = RLbl, Scale = scale, Order = i }
@@ -5309,6 +5677,9 @@ function Skibidi.CreateDropdown(Parent, Options)
 
 	buildRows()
 	refreshLabel()
+	-- The summary is assembled from several strings, so it is rebuilt on a
+	-- language change instead of being registered as one translated label.
+	BindLang(Card, refreshLabel)
 	AttachTooltip(Head, Options.Tooltip)
 
 	Head.MouseButton1Click:Connect(function()
@@ -5408,7 +5779,7 @@ function Skibidi.CreateKeybind(Parent, Options)
 	Lbl.TextSize               = Theme.BodySize
 	Lbl.TextColor3             = Theme.TextPrimary
 	Lbl.TextXAlignment         = Enum.TextXAlignment.Left
-	Lbl.Text                   = Options.Label or ""
+	SetText(Lbl, Options.Label or "")
 	if Options.Icon then PrefixIcon(Lbl, Options.Icon, 14, Theme.TextPrimary) end
 
 	local KeyBtn = Instance.new("TextButton", Row)
@@ -5421,7 +5792,10 @@ function Skibidi.CreateKeybind(Parent, Options)
 	KeyBtn.TextSize               = Theme.SmallSize
 	KeyBtn.TextColor3             = Theme.AccentSec
 	KeyBtn.AutoButtonColor        = false
-	KeyBtn.Text                   = current and current.Name or "None"
+	local function showKey(kc)
+		if kc then SetText(KeyBtn, kc.Name) else SetUiText(KeyBtn, "None", "none") end
+	end
+	showKey(current)
 	MakeCorner(KeyBtn, UDim.new(0, 5))
 	local keyStroke = MakeEdge(KeyBtn, Theme.AccentDim, 1)
 	MakeGloss(KeyBtn, 0.10)
@@ -5442,12 +5816,12 @@ function Skibidi.CreateKeybind(Parent, Options)
 	KeyBtn.MouseButton1Click:Connect(function()
 		if listening then stopListening(); return end
 		listening = true
-		KeyBtn.Text = "..."
+		SetUiText(KeyBtn, "...", "listening")
 		TweenService:Create(keyStroke, TweenFast, { Color = Theme.Accent, Thickness = 1.5 }):Play()
 		conn = UserInputService.InputBegan:Connect(function(inp)
 			if inp.UserInputType == Enum.UserInputType.Keyboard then
 				current = inp.KeyCode
-				KeyBtn.Text = current.Name
+				showKey(current)
 				stopListening()
 				if Options.OnChanged then Options.OnChanged(current) end
 			end
@@ -5475,7 +5849,7 @@ function Skibidi.CreateKeybind(Parent, Options)
 				end
 				if typeof(kc) == "EnumItem" then
 					current = kc
-					KeyBtn.Text = kc.Name
+					showKey(kc)
 					if Options.OnChanged then Options.OnChanged(current) end
 				end
 			end,
@@ -5486,7 +5860,7 @@ function Skibidi.CreateKeybind(Parent, Options)
 		Frame = Row,
 		Set = function(kc)
 			current = kc
-			KeyBtn.Text = kc and kc.Name or "None"
+			showKey(kc)
 		end,
 		GetValue = function() return current end,
 	}
@@ -5549,7 +5923,7 @@ function Skibidi.CreateCode(Parent, Options)
 		CopyBtn.Font                   = Theme.FontMedium
 		CopyBtn.TextSize               = 10
 		CopyBtn.TextColor3             = Theme.TextMuted
-		CopyBtn.Text                   = "Copy"
+		SetUiText(CopyBtn, "Copy", "copy")
 		CopyBtn.AutoButtonColor        = false
 		MakeCorner(CopyBtn, UDim.new(0, 5))
 		MakeEdge(CopyBtn, Theme.AccentDim, 1)
@@ -5565,11 +5939,11 @@ function Skibidi.CreateCode(Parent, Options)
 		CopyBtn.MouseButton1Click:Connect(function()
 			if setclipboard then
 				pcall(setclipboard, Options.Text or "")
-				CopyBtn.Text       = "Copied"
+				SetUiText(CopyBtn, "Copied", "copied")
 				CopyBtn.TextColor3 = Theme.Success
 				task.delay(1, function()
 					if not CopyBtn.Parent then return end
-					CopyBtn.Text       = "Copy"
+					SetUiText(CopyBtn, "Copy", "copy")
 					CopyBtn.TextColor3 = Theme.TextMuted
 				end)
 			end
@@ -5698,14 +6072,15 @@ function Skibidi.CreateVideo(Parent, Options)
 	PlayBtn.Font             = Theme.FontMedium
 	PlayBtn.TextSize         = Theme.SmallSize
 	PlayBtn.TextColor3       = Theme.TextPrimary
-	PlayBtn.Text             = "Play"
+	SetUiText(PlayBtn, "Play", "play")
 	PlayBtn.AutoButtonColor  = false
 	MakeCorner(PlayBtn, UDim.new(0, 5))
 	MakeEdge(PlayBtn, Theme.AccentDim, 1)
 	MakeGloss(PlayBtn, 0.10)
 
 	local function updateBtn()
-		PlayBtn.Text = Vid.Playing and "Pause" or "Play"
+		if Vid.Playing then SetUiText(PlayBtn, "Pause", "pause")
+		else SetUiText(PlayBtn, "Play", "play") end
 	end
 
 	local function Play() Vid:Play(); updateBtn() end
@@ -5844,7 +6219,7 @@ function Skibidi.CreateColorPicker(Parent, Options)
 	Lbl.TextSize               = Theme.BodySize
 	Lbl.TextColor3             = Theme.TextPrimary
 	Lbl.TextXAlignment         = Enum.TextXAlignment.Left
-	Lbl.Text                   = Options.Label or ""
+	SetText(Lbl, Options.Label or "")
 	if Options.Icon then PrefixIcon(Lbl, Options.Icon, 14, Theme.TextPrimary) end
 
 	local Swatch = Instance.new("Frame", Head)
@@ -6065,8 +6440,10 @@ end
 -- without having to reach into Skibidi.Theme directly.
 --
 -- Options:
---   Theme    table      Partial theme override, merged into Skibidi.Theme
---   Parent   Instance   Default parent for new panels (default PlayerGui)
+--   Theme         table     Partial theme override, merged into Skibidi.Theme
+--   Parent        Instance  Default parent for new panels (default PlayerGui)
+--   Localization  table     Passed straight to Skibidi.Localization
+--   Language      string    Language to start in (default: system locale)
 --
 -- Returns: Skibidi (so calls can be chained, e.g.
 --   Skibidi.Init({ Theme = { Accent = Color3.fromRGB(120,80,220) } }).CreatePanel({...})
@@ -6080,6 +6457,12 @@ function Skibidi.Init(Options)
 	end
 	if Options.Parent then
 		DefaultParent = Options.Parent
+	end
+	if Options.Localization then
+		Skibidi.Localization(Options.Localization)
+	end
+	if Options.Language then
+		Skibidi.SetLanguage(Options.Language)
 	end
 	return Skibidi
 end
@@ -6189,14 +6572,14 @@ function Skibidi.CreateLabel(Parent, Options)
 	Lbl.TextColor3             = Options.Color or Theme.TextMuted
 	Lbl.TextXAlignment         = Options.Alignment or Enum.TextXAlignment.Left
 	Lbl.TextTruncate           = Enum.TextTruncate.AtEnd
-	Lbl.Text                   = Options.Text or ""
+	SetText(Lbl, Options.Text or "")
 	Lbl.Parent                 = Parent
 	if Options.Icon then PadIcon(Lbl, Options.Icon, 14, Lbl.TextColor3) end
 
 	return {
 		Frame   = Lbl,
 		Label   = Lbl,
-		SetText = function(t) Lbl.Text = t or "" end,
+		SetText = function(t) SetText(Lbl, t or "") end,
 	}
 end
 
@@ -6235,7 +6618,7 @@ function Skibidi.CreateKeyValue(Parent, Options)
 	KeyLbl.TextColor3             = Theme.TextMuted
 	KeyLbl.TextXAlignment         = Enum.TextXAlignment.Left
 	KeyLbl.TextTruncate           = Enum.TextTruncate.AtEnd
-	KeyLbl.Text                   = Options.Label or ""
+	SetText(KeyLbl, Options.Label or "")
 	if Options.Icon then PrefixIcon(KeyLbl, Options.Icon, 14, Theme.TextMuted) end
 
 	local ValLbl = Instance.new("TextLabel", Row)
@@ -6247,7 +6630,7 @@ function Skibidi.CreateKeyValue(Parent, Options)
 	ValLbl.TextColor3             = Theme.AccentSec
 	ValLbl.TextXAlignment         = Enum.TextXAlignment.Right
 	ValLbl.TextTruncate           = Enum.TextTruncate.AtEnd
-	ValLbl.Text                   = value
+	SetText(ValLbl, value)
 
 	-- A stat row is read in bulk, so it gets a marker rather than a
 	-- border: the eye can run down a column of ticks far faster than it
@@ -6279,14 +6662,14 @@ function Skibidi.CreateKeyValue(Parent, Options)
 		Frame    = Row,
 		SetValue = function(v)
 			value = tostring(v)
-			ValLbl.Text = value
+			SetText(ValLbl, value)
 			-- A value that just changed should say so; the flash decays
 			-- back to the resting colour on its own.
 			ValLbl.TextColor3 = Lighten(Theme.AccentSec, 0.2)
 			TweenService:Create(ValLbl, TweenSoft,
 				{ TextColor3 = Theme.AccentSec }):Play()
 		end,
-		SetLabel = function(t) KeyLbl.Text = t or "" end,
+		SetLabel = function(t) SetText(KeyLbl, t or "") end,
 		GetValue = function() return value end,
 	}
 end
@@ -6308,6 +6691,8 @@ function Skibidi.Unload()
 	if _overlayWatch then _overlayWatch:Disconnect(); _overlayWatch = nil end
 	_openOverlay = nil
 	for k in pairs(Flags) do Flags[k] = nil end
+	for obj in pairs(LocObjects) do LocObjects[obj] = nil end
+	for i = #LocListeners, 1, -1 do LocListeners[i] = nil end
 end
 
 -- ============================================================
@@ -6321,6 +6706,12 @@ Skibidi.unload      = Skibidi.Unload
 Skibidi.saveconfig  = Skibidi.SaveConfig
 Skibidi.loadconfig  = Skibidi.LoadConfig
 Skibidi.notify      = Skibidi.ShowNotification
+Skibidi.localization   = Skibidi.Localization
+Skibidi.setlanguage    = Skibidi.SetLanguage
+Skibidi.getlanguage    = Skibidi.GetLanguage
+Skibidi.getlanguages   = Skibidi.GetLanguages
+Skibidi.addtranslations = Skibidi.AddTranslations
+Skibidi.translate      = Skibidi.Translate
 Skibidi.label       = Skibidi.CreateLabel
 Skibidi.keyvalue    = Skibidi.CreateKeyValue
 Skibidi.button      = Skibidi.CreateButton
