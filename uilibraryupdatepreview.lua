@@ -7888,7 +7888,10 @@ function Skibidi.CreateCardList(Parent, Options)
 		Button.Text = ""
 		Button.AutoButtonColor = false
 		Button.ZIndex = 3
-		local visualSize = Options.VisualSize or 44
+		-- Keep the visual nearly as tall as the card, leaving a small vertical
+		-- inset so it never touches the rounded card edges. VisualSize remains
+		-- available when a fixed thumbnail size is preferred.
+		local visualSize = Options.VisualSize or math.max(20, cardHeight - 12)
 		local hasVisual = data.Visual ~= nil
 			or data.Image ~= nil
 			or data.Asset ~= nil
