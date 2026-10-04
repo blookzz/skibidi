@@ -7805,7 +7805,8 @@ function Skibidi.CreateCardList(Parent, Options)
 					return clone:GetBoundingBox()
 				end)
 				if framed then
-					local distance = math.max(bounds.Magnitude * 1.15, 2)
+					local zoom = math.max(tonumber(Options.ModelZoom) or 1, 0.1)
+					local distance = math.max(bounds.Magnitude * 1.15 / zoom, 2)
 					cam.CFrame = CFrame.new(cf.Position + Vector3.new(0, bounds.Y * 0.12, distance), cf.Position)
 				end
 			end
