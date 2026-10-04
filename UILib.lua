@@ -7745,19 +7745,33 @@ function Skibidi.CreateCardList(Parent, Options)
 		local holder = Instance.new("Frame")
 		holder.Size = UDim2.new(0, size, 0, size)
 		holder.Position = UDim2.new(0, 10, 0.5, -size / 2)
-		holder.BackgroundColor3 = Theme.Bg3
+		holder.BackgroundTransparency = 1
 		holder.BorderSizePixel = 0
-		holder.ClipsDescendants = true
+		holder.ClipsDescendants = false
 		holder.ZIndex = 2
 		holder.Parent = host
-		MakeCorner(holder, UDim.new(0, Options.VisualRadius or 8))
+		local visualRadius = UDim.new(0, Options.VisualRadius or 8)
+		MakeCorner(holder, visualRadius)
 		MakeEdge(holder, Theme.AccentDim, 1)
+
+		-- Keep the border outside the clipping surface. UIStroke is a child of
+		-- the holder, so clipping the holder itself also clips the stroke at the
+		-- corners. The inner surface clips the image/model while the holder
+		-- remains free to render its complete rounded outline.
+		local content = Instance.new("Frame")
+		content.Size = UDim2.new(1, 0, 1, 0)
+		content.BackgroundColor3 = Theme.Bg3
+		content.BorderSizePixel = 0
+		content.ClipsDescendants = true
+		content.ZIndex = holder.ZIndex
+		content.Parent = holder
+		MakeCorner(content, visualRadius)
 
 		if playerSpec then
 			local userId = typeof(playerSpec) == "Instance" and playerSpec:IsA("Player") and playerSpec.UserId
 				or tonumber(playerSpec)
 			if userId then
-				local img = Instance.new("ImageLabel", holder)
+				local img = Instance.new("ImageLabel", content)
 				img.Size = UDim2.new(1, 0, 1, 0)
 				img.BackgroundTransparency = 1
 				img.ScaleType = Enum.ScaleType.Crop
@@ -7772,20 +7786,20 @@ function Skibidi.CreateCardList(Parent, Options)
 					img.Image = content
 				end
 			elseif imageSpec then
-				local img = Instance.new("ImageLabel", holder)
+				local img = Instance.new("ImageLabel", content)
 				img.Size = UDim2.new(1, 0, 1, 0)
 				img.BackgroundTransparency = 1
 				img.Image = assetId(imageSpec) or ""
 				img.ScaleType = Options.ScaleType or Enum.ScaleType.Crop
 			end
 		elseif imageSpec then
-			local img = Instance.new("ImageLabel", holder)
+			local img = Instance.new("ImageLabel", content)
 			img.Size = UDim2.new(1, 0, 1, 0)
 			img.BackgroundTransparency = 1
 			img.Image = assetId(imageSpec) or ""
 			img.ScaleType = Options.ScaleType or Enum.ScaleType.Crop
 		elseif modelSpec and typeof(modelSpec) == "Instance" then
-			local vp = Instance.new("ViewportFrame", holder)
+			local vp = Instance.new("ViewportFrame", content)
 			vp.Size = UDim2.new(1, 0, 1, 0)
 			vp.BackgroundColor3 = Theme.Bg3
 			vp.BorderSizePixel = 0
@@ -7876,7 +7890,10 @@ function Skibidi.CreateCardList(Parent, Options)
 		Row.Size = UDim2.new(1, 0, 0, cardHeight)
 		Row.BackgroundColor3 = Theme.Bg2
 		Row.BorderSizePixel = 0
-		Row.ClipsDescendants = true
+		-- The row's UICorner clips its own background. Child effects provide
+		-- their own rounded clipping, while the outer row stays unclipped so
+		-- its UIStroke is not cut off at the corners.
+		Row.ClipsDescendants = false
 		Row.Parent = List
 		MakeCorner(Row, UDim.new(0, Theme.CornerRadiusSmall))
 		local edge = MakeEdge(Row, Theme.AccentDim, 1)
