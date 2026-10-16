@@ -5694,11 +5694,8 @@ function Skibidi.ShowNotification(Title, Text, Duration, Icon, MaxLines)
 	local iconColor = kind and Theme[kind[2]] or Theme.AccentSec
 
 	local bodyText = Text or ""
-	local textX_base = 16
-	if iconSpec then
-		textX_base = 15 + 18 + 7
-	end
-	local availW = NOTIF_W - textX_base - 12
+	local textX_offset = iconSpec and (15 + 18 + 7) or 16
+	local availW = NOTIF_W - textX_offset - 12
 	local lineCount = 0
 
 	-- Measure wrapped text to get actual line count
@@ -5785,15 +5782,55 @@ function Skibidi.ShowNotification(Title, Text, Duration, Icon, MaxLines)
 	ListLayout.Padding = UDim.new(0, 4)
 	ListLayout.Parent = BodyContainer
 
-	-- Split text by newlines and create a label for each line
-	local bodyLines = {}
-	for line in string.gmatch(bodyText .. "\n", "([^\n]*)\n") do
-		if #bodyLines < maxLines then
-			table.insert(bodyLines, line)
+	-- Split text and wrap lines that exceed available width
+	local displayLines = {}
+	for hardLine in string.gmatch(bodyText .. "\n", "([^\n]*)\n") do
+		if #displayLines >= maxLines then
+			break
+		end
+		if hardLine == "" then
+			table.insert(displayLines, "")
+		else
+			-- Measure the line and split if needed
+			local size =
+				TextService:GetTextSize(hardLine, Theme.SmallSize, Theme.FontRegular, Vector2.new(availW, 99999))
+			local wrappedCount = math.ceil(size.Y / NOTIF_LINE_H)
+			if wrappedCount <= 1 then
+				table.insert(displayLines, hardLine)
+			else
+				-- Split long words with spaces to enable wrapping
+				local words = {}
+				for word in string.gmatch(hardLine, "%S+") do
+					table.insert(words, word)
+				end
+				local line = ""
+				for i, word in ipairs(words) do
+					local testLine = (line == "") and word or (line .. " " .. word)
+					local testSize = TextService:GetTextSize(
+						testLine,
+						Theme.SmallSize,
+						Theme.FontRegular,
+						Vector2.new(availW, 99999)
+					)
+					if testSize.X > availW and line ~= "" then
+						-- This word doesn't fit; flush current line
+						table.insert(displayLines, line)
+						line = word
+						if #displayLines >= maxLines then
+							break
+						end
+					else
+						line = testLine
+					end
+				end
+				if line ~= "" and #displayLines < maxLines then
+					table.insert(displayLines, line)
+				end
+			end
 		end
 	end
 
-	for _, line in ipairs(bodyLines) do
+	for _, line in ipairs(displayLines) do
 		local Lbl = Instance.new("TextLabel", BodyContainer)
 		Lbl.Size = UDim2.new(1, 0, 0, NOTIF_LINE_H)
 		Lbl.BackgroundTransparency = 1
@@ -5801,7 +5838,9 @@ function Skibidi.ShowNotification(Title, Text, Duration, Icon, MaxLines)
 		Lbl.TextSize = Theme.SmallSize
 		Lbl.TextColor3 = Theme.TextPrimary
 		Lbl.TextXAlignment = Enum.TextXAlignment.Left
-		Lbl.TextTruncate = Enum.TextTruncate.AtEnd
+		Lbl.TextYAlignment = Enum.TextYAlignment.Top
+		Lbl.TextWrapped = true
+		Lbl.TextTruncate = Enum.TextTruncate.None
 		Lbl.ZIndex = 2
 		SetText(Lbl, line)
 	end
