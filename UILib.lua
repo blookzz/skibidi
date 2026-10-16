@@ -5693,13 +5693,30 @@ function Skibidi.ShowNotification(Title, Text, Duration, Icon, MaxLines)
 	local iconSpec = kind and kind[1] or Icon
 	local iconColor = kind and Theme[kind[2]] or Theme.AccentSec
 
-	-- Calculate height based on text lines
 	local bodyText = Text or ""
-	local lineCount = 1
-	for _ in string.gmatch(bodyText, "\n") do
-		lineCount = lineCount + 1
+	local textX_base = 16
+	if iconSpec then
+		textX_base = 15 + 18 + 7
 	end
-	lineCount = math.min(lineCount, maxLines)
+	local availW = NOTIF_W - textX_base - 12
+	local lineCount = 0
+	
+	-- Measure wrapped text to get actual line count
+	if bodyText ~= "" then
+		for line in string.gmatch(bodyText .. "\n", "([^\n]*)\n") do
+			if lineCount >= maxLines then break end
+			if line == "" then
+				lineCount = lineCount + 1
+			else
+				local size = TextService:GetTextSize(line, Theme.SmallSize, Theme.FontRegular, Vector2.new(availW, 99999))
+				local wrappedLines = math.ceil(size.Y / NOTIF_LINE_H)
+				lineCount = lineCount + wrappedLines
+			end
+		end
+	else
+		lineCount = 1
+	end
+	lineCount = math.max(1, math.min(lineCount, maxLines))
 	local contentHeight = 8 + 16 + 8 + (lineCount - 1) * (NOTIF_LINE_H + 4)
 	local notifH = NOTIF_BASE_H + math.max(0, contentHeight - 40)
 
