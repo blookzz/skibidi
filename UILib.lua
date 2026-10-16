@@ -5694,29 +5694,48 @@ function Skibidi.ShowNotification(Title, Text, Duration, Icon, MaxLines)
 	local iconColor = kind and Theme[kind[2]] or Theme.AccentSec
 
 	local bodyText = Text or ""
-	local textX_offset = iconSpec and (15 + 18 + 7) or 16
-	local availW = NOTIF_W - textX_offset - 12
-	local lineCount = 0
 
-	-- Measure wrapped text to get actual line count
+	-- Determine text positioning based on icon presence
+	local textX, textW = 16, -26
+	if iconSpec then
+		textX, textW = 15 + 18 + 7, -(26 + 18 + 6)
+	end
+	local availW = NOTIF_W + textW - 10
+
+	-- Calculate line count and split text before frame sizing
+	local displayLines = {}
 	if bodyText ~= "" then
-		for line in string.gmatch(bodyText .. "\n", "([^\n]*)\n") do
-			if lineCount >= maxLines then
+		for hardLine in string.gmatch(bodyText .. "\n", "([^\n]*)\n") do
+			if #displayLines >= maxLines then
 				break
 			end
-			if line == "" then
-				lineCount = lineCount + 1
+			if hardLine == "" then
+				table.insert(displayLines, "")
 			else
 				local size =
-					TextService:GetTextSize(line, Theme.SmallSize, Theme.FontRegular, Vector2.new(availW, 99999))
-				local wrappedLines = math.ceil(size.Y / NOTIF_LINE_H)
-				lineCount = lineCount + wrappedLines
+					TextService:GetTextSize(hardLine, Theme.SmallSize, Theme.FontRegular, Vector2.new(availW, 99999))
+				local wrappedCount = math.ceil(size.Y / NOTIF_LINE_H)
+				if wrappedCount <= 1 then
+					table.insert(displayLines, hardLine)
+				else
+					local charCount = #hardLine
+					local charsPerLine = math.max(1, math.floor(charCount / wrappedCount))
+					local pos = 1
+					while pos <= charCount and #displayLines < maxLines do
+						local endPos = math.min(pos + charsPerLine, charCount + 1)
+						local chunk = string.sub(hardLine, pos, endPos - 1)
+						table.insert(displayLines, chunk)
+						pos = endPos
+					end
+				end
 			end
 		end
-	else
+	end
+
+	local lineCount = #displayLines
+	if lineCount == 0 then
 		lineCount = 1
 	end
-	lineCount = math.max(1, math.min(lineCount, maxLines))
 	local contentHeight = 8 + 16 + 8 + (lineCount - 1) * (NOTIF_LINE_H + 4)
 	local notifH = NOTIF_BASE_H + math.max(0, contentHeight - 40)
 
@@ -5731,11 +5750,8 @@ function Skibidi.ShowNotification(Title, Text, Duration, Icon, MaxLines)
 	MakeEdge(F, Theme.Accent, 1.2, 0.12)
 	MakeGloss(F, 0.14)
 	MakeGrain(F)
-	-- Banners land over arbitrary game content, so they carry their own
-	-- shadow and bloom instead of relying on the backdrop for contrast.
 	MakeGlow(F, Theme.Accent, 20, 0.84)
 
-	-- Accent rail down the left edge
 	local Bar = Instance.new("Frame", F)
 	Bar.Size = UDim2.new(0, 3, 1, -12)
 	Bar.Position = UDim2.new(0, 5, 0, 6)
@@ -5745,16 +5761,12 @@ function Skibidi.ShowNotification(Title, Text, Duration, Icon, MaxLines)
 	MakeCorner(Bar, UDim.new(1, 0))
 	MakeAccentFill(Bar, kind and iconColor or Theme.Accent)
 
-	-- Optional icon between the rail and the text
-	local textX, textW = 16, -26
 	if iconSpec then
 		local NI = MakeIcon(F, iconSpec, 18, iconColor, 2)
 		NI.AnchorPoint = Vector2.new(0, 0.5)
 		NI.Position = UDim2.new(0, 15, 0.5, 0)
-		textX, textW = 15 + 18 + 7, -(26 + 18 + 6)
 	end
 
-	-- Title on first line
 	local TitleLbl = Instance.new("TextLabel", F)
 	TitleLbl.Size = UDim2.new(1, textW, 0, 16)
 	TitleLbl.Position = UDim2.new(0, textX, 0, 8)
@@ -5782,54 +5794,6 @@ function Skibidi.ShowNotification(Title, Text, Duration, Icon, MaxLines)
 	ListLayout.Padding = UDim.new(0, 4)
 	ListLayout.Parent = BodyContainer
 
-	-- Split text and wrap lines that exceed available width
-	local displayLines = {}
-	for hardLine in string.gmatch(bodyText .. "\n", "([^\n]*)\n") do
-		if #displayLines >= maxLines then
-			break
-		end
-		if hardLine == "" then
-			table.insert(displayLines, "")
-		else
-			-- Measure the line and split if needed
-			local size =
-				TextService:GetTextSize(hardLine, Theme.SmallSize, Theme.FontRegular, Vector2.new(availW, 99999))
-			local wrappedCount = math.ceil(size.Y / NOTIF_LINE_H)
-			if wrappedCount <= 1 then
-				table.insert(displayLines, hardLine)
-			else
-				-- Split long words with spaces to enable wrapping
-				local words = {}
-				for word in string.gmatch(hardLine, "%S+") do
-					table.insert(words, word)
-				end
-				local line = ""
-				for i, word in ipairs(words) do
-					local testLine = (line == "") and word or (line .. " " .. word)
-					local testSize = TextService:GetTextSize(
-						testLine,
-						Theme.SmallSize,
-						Theme.FontRegular,
-						Vector2.new(availW, 99999)
-					)
-					if testSize.X > availW and line ~= "" then
-						-- This word doesn't fit; flush current line
-						table.insert(displayLines, line)
-						line = word
-						if #displayLines >= maxLines then
-							break
-						end
-					else
-						line = testLine
-					end
-				end
-				if line ~= "" and #displayLines < maxLines then
-					table.insert(displayLines, line)
-				end
-			end
-		end
-	end
-
 	for _, line in ipairs(displayLines) do
 		local Lbl = Instance.new("TextLabel", BodyContainer)
 		Lbl.Size = UDim2.new(1, 0, 0, NOTIF_LINE_H)
@@ -5845,8 +5809,7 @@ function Skibidi.ShowNotification(Title, Text, Duration, Icon, MaxLines)
 		SetText(Lbl, line)
 	end
 
-	-- Countdown rule along the bottom: the banner shows how long it has
-	-- left instead of vanishing without warning.
+	-- Countdown rule along the bottom
 	local Timer = Instance.new("Frame", F)
 	Timer.AnchorPoint = Vector2.new(0, 1)
 	Timer.Size = UDim2.new(1, 0, 0, 2)
