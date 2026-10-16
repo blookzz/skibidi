@@ -5626,15 +5626,19 @@ end
 -- Multiple calls stack vertically.
 --
 -- Args:
---   Title     string
---   Text      string
---   Duration  number   Seconds before auto-dismiss (default 2.5)
+--   Title           string
+--   Text            string
+--   Duration        number   Seconds before auto-dismiss (default 2.5)
+--   Icon            string
+--   MaxLines        number   Max lines of text (default 3)
 -- ============================================================
 local _notifList = {}
 local _notifSg = nil
 local NOTIF_W = 268
-local NOTIF_H = 48
+local NOTIF_BASE_H = 48
 local NOTIF_PAD = 8
+local NOTIF_MAX_LINES = 3
+local NOTIF_LINE_H = 16
 
 local function _ensureNotifGui()
 	if _notifSg and _notifSg.Parent then
@@ -5655,18 +5659,19 @@ local function _repositionNotifs()
 	for i = #_notifList, 1, -1 do
 		local f = _notifList[i]
 		if f and f.Parent then
-			local targetY = -(bottomMargin + totalY + NOTIF_H)
+			local notifH = f.Size.Y.Offset
+			local targetY = -(bottomMargin + totalY + notifH)
 			TweenService:Create(f, TweenSoft, { Position = UDim2.new(1, -(NOTIF_W + 12), 1, targetY) }):Play()
-			totalY = totalY + NOTIF_H + NOTIF_PAD
+			totalY = totalY + notifH + NOTIF_PAD
 		end
 	end
 end
 
--- ShowNotification(Title, Text, Duration, Icon)
--- or ShowNotification({ Title=, Text=, Duration=, Icon= })
+-- ShowNotification(Title, Text, Duration, Icon, MaxLines)
+-- or ShowNotification({ Title=, Text=, Duration=, Icon=, MaxLines= })
 -- Icon is a lucide spec, or one of "success" | "warning" | "error" |
 -- "info", which also tints the banner's rail with the matching
--- semantic colour.
+-- semantic colour. MaxLines caps multi-line text (default 3, max 10).
 local NOTIF_KINDS = {
 	success = { "circle-check", "Success" },
 	warning = { "triangle-alert", "Warning" },
@@ -5674,21 +5679,32 @@ local NOTIF_KINDS = {
 	danger = { "circle-x", "Danger" },
 	info = { "info", "Info" },
 }
-function Skibidi.ShowNotification(Title, Text, Duration, Icon)
+function Skibidi.ShowNotification(Title, Text, Duration, Icon, MaxLines)
 	_ensureNotifGui()
 
 	if type(Title) == "table" then
 		local o = Title
-		Title, Text, Duration, Icon = o.Title, o.Text or o.Content, o.Duration, o.Icon
+		Title, Text, Duration, Icon, MaxLines = o.Title, o.Text or o.Content, o.Duration, o.Icon, o.MaxLines
 	end
 	local dur = tonumber(Duration) or 2.5
+	local maxLines = math.max(1, math.min(tonumber(MaxLines) or NOTIF_MAX_LINES, 10))
 
 	local kind = type(Icon) == "string" and NOTIF_KINDS[string.lower(Icon)] or nil
 	local iconSpec = kind and kind[1] or Icon
 	local iconColor = kind and Theme[kind[2]] or Theme.AccentSec
 
+	-- Calculate height based on text lines
+	local bodyText = Text or ""
+	local lineCount = 1
+	for _ in string.gmatch(bodyText, "\n") do
+		lineCount = lineCount + 1
+	end
+	lineCount = math.min(lineCount, maxLines)
+	local contentHeight = 8 + 16 + 8 + (lineCount - 1) * (NOTIF_LINE_H + 4)
+	local notifH = NOTIF_BASE_H + math.max(0, contentHeight - 40)
+
 	local F = Instance.new("Frame", _notifSg)
-	F.Size = UDim2.new(0, NOTIF_W, 0, NOTIF_H)
+	F.Size = UDim2.new(0, NOTIF_W, 0, notifH)
 	F.Position = UDim2.new(1, 12, 1, 0) -- starts off-screen right
 	F.BackgroundColor3 = Theme.Bg1
 	F.BackgroundTransparency = 0.04
@@ -5721,9 +5737,7 @@ function Skibidi.ShowNotification(Title, Text, Duration, Icon)
 		textX, textW = 15 + 18 + 7, -(26 + 18 + 6)
 	end
 
-	-- Title and body on separate lines. Packing both into one truncated
-	-- RichText run meant a long title ate the message; stacked, each gets
-	-- its own budget and its own weight.
+	-- Title on first line
 	local TitleLbl = Instance.new("TextLabel", F)
 	TitleLbl.Size = UDim2.new(1, textW, 0, 16)
 	TitleLbl.Position = UDim2.new(0, textX, 0, 8)
@@ -5736,17 +5750,41 @@ function Skibidi.ShowNotification(Title, Text, Duration, Icon)
 	TitleLbl.ZIndex = 2
 	SetText(TitleLbl, Title or "", string.upper)
 
-	local Lbl = Instance.new("TextLabel", F)
-	Lbl.Size = UDim2.new(1, textW, 0, 16)
-	Lbl.Position = UDim2.new(0, textX, 0, 24)
-	Lbl.BackgroundTransparency = 1
-	Lbl.Font = Theme.FontRegular
-	Lbl.TextSize = Theme.SmallSize
-	Lbl.TextColor3 = Theme.TextPrimary
-	Lbl.TextXAlignment = Enum.TextXAlignment.Left
-	Lbl.TextTruncate = Enum.TextTruncate.AtEnd
-	Lbl.ZIndex = 2
-	SetText(Lbl, Text or "")
+	-- Multi-line body text with wrapping and vertical layout
+	local BodyContainer = Instance.new("Frame", F)
+	BodyContainer.Size = UDim2.new(1, textW, 0, lineCount * NOTIF_LINE_H + (lineCount - 1) * 4)
+	BodyContainer.Position = UDim2.new(0, textX, 0, 24)
+	BodyContainer.BackgroundTransparency = 1
+	BodyContainer.BorderSizePixel = 0
+	BodyContainer.ZIndex = 2
+	BodyContainer.ClipsDescendants = true
+
+	local ListLayout = Instance.new("UIListLayout")
+	ListLayout.FillDirection = Enum.FillDirection.Vertical
+	ListLayout.VerticalAlignment = Enum.VerticalAlignment.Top
+	ListLayout.Padding = UDim.new(0, 4)
+	ListLayout.Parent = BodyContainer
+
+	-- Split text by newlines and create a label for each line
+	local bodyLines = {}
+	for line in string.gmatch(bodyText .. "\n", "([^\n]*)\n") do
+		if #bodyLines < maxLines then
+			table.insert(bodyLines, line)
+		end
+	end
+
+	for _, line in ipairs(bodyLines) do
+		local Lbl = Instance.new("TextLabel", BodyContainer)
+		Lbl.Size = UDim2.new(1, 0, 0, NOTIF_LINE_H)
+		Lbl.BackgroundTransparency = 1
+		Lbl.Font = Theme.FontRegular
+		Lbl.TextSize = Theme.SmallSize
+		Lbl.TextColor3 = Theme.TextPrimary
+		Lbl.TextXAlignment = Enum.TextXAlignment.Left
+		Lbl.TextTruncate = Enum.TextTruncate.AtEnd
+		Lbl.ZIndex = 2
+		SetText(Lbl, line)
+	end
 
 	-- Countdown rule along the bottom: the banner shows how long it has
 	-- left instead of vanishing without warning.
@@ -5796,6 +5834,11 @@ function Skibidi.ShowNotification(Title, Text, Duration, Icon)
 			_repositionNotifs()
 		end)
 	end)
+end
+
+-- Alias for backwards compatibility
+function Skibidi.ShowNotificationEx(Title, Text, Duration, Icon, MaxLines)
+	return Skibidi.ShowNotification(Title, Text, Duration, Icon, MaxLines)
 end
 
 -- ============================================================
@@ -8242,6 +8285,17 @@ Skibidi.unload = Skibidi.Unload
 Skibidi.saveconfig = Skibidi.SaveConfig
 Skibidi.loadconfig = Skibidi.LoadConfig
 Skibidi.notify = Skibidi.ShowNotification
+
+function Skibidi.ClearNotifications()
+	for i = #_notifList, 1, -1 do
+		local f = _notifList[i]
+		if f and f.Parent then
+			f:Destroy()
+		end
+		table.remove(_notifList, i)
+	end
+	_repositionNotifs()
+end
 Skibidi.localization = Skibidi.Localization
 Skibidi.setlanguage = Skibidi.SetLanguage
 Skibidi.getlanguage = Skibidi.GetLanguage
