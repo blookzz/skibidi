@@ -5700,15 +5700,18 @@ function Skibidi.ShowNotification(Title, Text, Duration, Icon, MaxLines)
 	end
 	local availW = NOTIF_W - textX_base - 12
 	local lineCount = 0
-	
+
 	-- Measure wrapped text to get actual line count
 	if bodyText ~= "" then
 		for line in string.gmatch(bodyText .. "\n", "([^\n]*)\n") do
-			if lineCount >= maxLines then break end
+			if lineCount >= maxLines then
+				break
+			end
 			if line == "" then
 				lineCount = lineCount + 1
 			else
-				local size = TextService:GetTextSize(line, Theme.SmallSize, Theme.FontRegular, Vector2.new(availW, 99999))
+				local size =
+					TextService:GetTextSize(line, Theme.SmallSize, Theme.FontRegular, Vector2.new(availW, 99999))
 				local wrappedLines = math.ceil(size.Y / NOTIF_LINE_H)
 				lineCount = lineCount + wrappedLines
 			end
