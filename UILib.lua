@@ -8424,6 +8424,9 @@ end
 --   Position     UDim2       (default centred on X, near the top of Y)
 --   AnchorPoint  Vector2     (default 0.5, 0)
 --   Draggable    bool        Drag the HUD around          (default true)
+--   DragAxis     string      "Y" (default) = up/down only; "XY" = anywhere
+--                            (also "Any" / "Free"); "X" = left/right only.
+--                            FreeDrag = true is a shortcut for "XY".
 --   ClampToScreen bool       Keep it on screen while dragging (default true)
 --   Accent / AccentDim       Color3 overrides
 --   DisplayOrder number      (default 1)
@@ -8435,6 +8438,7 @@ end
 --     Gui, Root, Frame, TitleLabel, SubTitleLabel,
 --     SetTitle(text|nil), SetSubTitle(text|nil), GetTitle(), GetSubTitle(),
 --     SetSize(w, h), SetScale(n), SetAutoScale(bool), SetPosition(UDim2),
+--     SetDragAxis("Y" | "XY" | "X"), GetDragAxis(),
 --     SetVisible(bool), ToggleVisible(), IsVisible(), Destroy(),
 --     SetShowFps(bool), SetShowPing(bool), GetFps(), GetPing(),
 --     AddToggle(target) -> { Button, Refresh(), Remove() },
@@ -8540,6 +8544,12 @@ function Skibidi.CreateStatusHUD(Options)
 		return (ok and b and b.X) or (#text * size * 0.55)
 	end
 
+	-- Title / subtitle text sizes. The HUD sits inside a UIScale (device
+	-- auto-scale), which shrinks everything on smaller screens while the
+	-- panel stays at 1x. These are counter-scaled in applyScale so the
+	-- heading renders at the same on-screen size as the panel's.
+	local titleSz, subSz = Theme.TitleSize, Theme.CaptionSize
+
 	-- ── ScreenGui ───────────────────────────────────────────
 	local Gui = Instance.new("ScreenGui")
 	Gui.Name = Options.Name or "SkibidiStatusHUD"
@@ -8634,7 +8644,13 @@ function Skibidi.CreateStatusHUD(Options)
 	MakePadding(Content, PAD_X, PAD_X, PAD_Y, PAD_Y)
 	-- Everything sits on one axis, centred both ways. The card's height is
 	-- computed from its contents (see relayout) rather than auto-sized.
-	MakeListLayout(Content, Enum.FillDirection.Vertical, LIST_GAP, Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Center)
+	MakeListLayout(
+		Content,
+		Enum.FillDirection.Vertical,
+		LIST_GAP,
+		Enum.HorizontalAlignment.Center,
+		Enum.VerticalAlignment.Center
+	)
 
 	-- Entrance pop, on the card so the shadow does not fight it.
 	local PopScale = Instance.new("UIScale")
@@ -8653,7 +8669,13 @@ function Skibidi.CreateStatusHUD(Options)
 	Header.BorderSizePixel = 0
 	Header.ZIndex = 2
 	Header.Parent = Content
-	MakeListLayout(Header, Enum.FillDirection.Horizontal, 8, Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Center)
+	MakeListLayout(
+		Header,
+		Enum.FillDirection.Horizontal,
+		8,
+		Enum.HorizontalAlignment.Center,
+		Enum.VerticalAlignment.Center
+	)
 
 	local Pip = Instance.new("Frame")
 	Pip.LayoutOrder = 1
@@ -8671,7 +8693,7 @@ function Skibidi.CreateStatusHUD(Options)
 	TitleLabel.Size = UDim2.new(0, 0, 1, 0)
 	TitleLabel.BackgroundTransparency = 1
 	TitleLabel.Font = Theme.FontBold
-	TitleLabel.TextSize = Theme.TitleSize
+	TitleLabel.TextSize = titleSz
 	TitleLabel.TextColor3 = Theme.AccentSec
 	TitleLabel.TextXAlignment = Enum.TextXAlignment.Center
 	TitleLabel.TextYAlignment = Enum.TextYAlignment.Center
@@ -8708,7 +8730,7 @@ function Skibidi.CreateStatusHUD(Options)
 	SubLabel.Size = UDim2.new(0, 0, 1, 0)
 	SubLabel.BackgroundTransparency = 1
 	SubLabel.Font = Theme.FontMedium
-	SubLabel.TextSize = Theme.CaptionSize
+	SubLabel.TextSize = subSz
 	SubLabel.TextColor3 = Theme.TextMuted
 	SubLabel.TextXAlignment = Enum.TextXAlignment.Center
 	SubLabel.TextYAlignment = Enum.TextYAlignment.Center
@@ -8746,7 +8768,13 @@ function Skibidi.CreateStatusHUD(Options)
 	StatsRow.BorderSizePixel = 0
 	StatsRow.ZIndex = 2
 	StatsRow.Parent = Content
-	MakeListLayout(StatsRow, Enum.FillDirection.Horizontal, GAP, Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Center)
+	MakeListLayout(
+		StatsRow,
+		Enum.FillDirection.Horizontal,
+		GAP,
+		Enum.HorizontalAlignment.Center,
+		Enum.VerticalAlignment.Center
+	)
 
 	local stats = {}
 	local function makeStat(order, caption, sample)
@@ -8772,7 +8800,13 @@ function Skibidi.CreateStatusHUD(Options)
 		Group.BackgroundTransparency = 1
 		Group.ZIndex = 3
 		Group.Parent = Chip
-		MakeListLayout(Group, Enum.FillDirection.Horizontal, 6, Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Center)
+		MakeListLayout(
+			Group,
+			Enum.FillDirection.Horizontal,
+			6,
+			Enum.HorizontalAlignment.Center,
+			Enum.VerticalAlignment.Center
+		)
 
 		local Dot = Instance.new("Frame")
 		Dot.LayoutOrder = 1
@@ -8841,8 +8875,8 @@ function Skibidi.CreateStatusHUD(Options)
 		if fixedW then
 			return math.max(fixedW, 120)
 		end
-		local tw = measure(TitleLabel.Text, Theme.TitleSize, Theme.FontBold)
-		local sw = SubLabel.Text ~= "" and (measure(SubLabel.Text, Theme.CaptionSize, Theme.FontMedium) + 14 + 8) or 0
+		local tw = measure(TitleLabel.Text, titleSz, Theme.FontBold)
+		local sw = SubLabel.Text ~= "" and (measure(SubLabel.Text, subSz, Theme.FontMedium) + 14 + 8) or 0
 		local need = PAD_X * 2 + (TitleLabel.Text ~= "" and (11 + tw + 4) or 0) + sw
 		return math.clamp(math.ceil(need), 560, 920)
 	end
@@ -8856,7 +8890,7 @@ function Skibidi.CreateStatusHUD(Options)
 		baseW = computeWidth()
 
 		-- A long title truncates inside the card instead of spilling out.
-		local subW = SubPill.Visible and (measure(SubLabel.Text, Theme.CaptionSize, Theme.FontMedium) + 14 + 8) or 0
+		local subW = SubPill.Visible and (measure(SubLabel.Text, subSz, Theme.FontMedium) + 14 + 8) or 0
 		local avail = baseW - PAD_X * 2 - (Pip.Visible and 11 or 0) - subW - 2
 		TitleLimit.MaxSize = Vector2.new(math.max(avail, 20), 1000)
 
@@ -8912,6 +8946,19 @@ function Skibidi.CreateStatusHUD(Options)
 			k = k * math.clamp((s.X + s.Y) / 3000, minScale, maxScale)
 		end
 		ScaleObj.Scale = k
+
+		-- Counter-scale the heading so it matches the panel's on-screen size.
+		local inv = 1 / math.max(k, 0.01)
+		local nt = math.clamp(math.floor(Theme.TitleSize * inv + 0.5), 1, 100)
+		local ns = math.clamp(math.floor(Theme.CaptionSize * inv + 0.5), 1, 100)
+		Pip.Size = UDim2.new(0, 3, 0, math.floor(14 * inv + 0.5))
+		SubPill.Size = UDim2.new(0, 0, 0, math.floor(16 * inv + 0.5))
+		if nt ~= titleSz or ns ~= subSz then
+			titleSz, subSz = nt, ns
+			TitleLabel.TextSize = titleSz
+			SubLabel.TextSize = subSz
+			relayout()
+		end
 	end
 	Gui:GetPropertyChangedSignal("AbsoluteSize"):Connect(applyScale)
 
@@ -8980,7 +9027,13 @@ function Skibidi.CreateStatusHUD(Options)
 		togglerSection.ZIndex = 2
 		togglerSection.Visible = false
 		togglerSection.Parent = Content
-		MakeListLayout(togglerSection, Enum.FillDirection.Vertical, 6, Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Top)
+		MakeListLayout(
+			togglerSection,
+			Enum.FillDirection.Vertical,
+			6,
+			Enum.HorizontalAlignment.Center,
+			Enum.VerticalAlignment.Top
+		)
 
 		makeRule(togglerSection, 1)
 
@@ -9073,7 +9126,13 @@ function Skibidi.CreateStatusHUD(Options)
 		Group.BackgroundTransparency = 1
 		Group.ZIndex = 4
 		Group.Parent = Btn
-		MakeListLayout(Group, Enum.FillDirection.Horizontal, 6, Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Center)
+		MakeListLayout(
+			Group,
+			Enum.FillDirection.Horizontal,
+			6,
+			Enum.HorizontalAlignment.Center,
+			Enum.VerticalAlignment.Center
+		)
 
 		local Dot = Instance.new("Frame")
 		Dot.LayoutOrder = 1
@@ -9271,6 +9330,26 @@ function Skibidi.CreateStatusHUD(Options)
 	end)
 
 	-- ── Dragging (anywhere on the card; buttons keep their clicks) ──
+	-- Y-only by default; "XY" (or FreeDrag = true) lets it go anywhere.
+	local function normAxis(v)
+		if v == true then
+			return "XY"
+		end
+		local a = type(v) == "string" and v:lower() or ""
+		if a == "xy" or a == "any" or a == "free" or a == "both" or a == "all" or a == "anywhere" then
+			return "XY"
+		elseif a == "x" then
+			return "X"
+		end
+		return "Y"
+	end
+	local dragAxis
+	if Options.DragAxis ~= nil then
+		dragAxis = normAxis(Options.DragAxis)
+	else
+		dragAxis = Options.FreeDrag == true and "XY" or "Y"
+	end
+
 	if Options.Draggable ~= false then
 		local clampToScreen = Options.ClampToScreen ~= false
 		local dragging, dragStart, startPos = false, nil, nil
@@ -9301,15 +9380,21 @@ function Skibidi.CreateStatusHUD(Options)
 				return
 			end
 			local d = inp.Position - dragStart
-			local ox, oy = startPos.X.Offset + d.X, startPos.Y.Offset + d.Y
+			local moveX, moveY = dragAxis ~= "Y", dragAxis ~= "X"
+			local ox = startPos.X.Offset + (moveX and d.X or 0)
+			local oy = startPos.Y.Offset + (moveY and d.Y or 0)
 			if clampToScreen then
 				-- Work out where the top-left corner lands (anchor point and
 				-- scale included) and pull it back inside the screen.
 				local S, s, a = screenSize(), Root.AbsoluteSize, Root.AnchorPoint
 				local x = startPos.X.Scale * S.X + ox - a.X * s.X
 				local y = startPos.Y.Scale * S.Y + oy - a.Y * s.Y
-				ox = ox + (math.clamp(x, 0, math.max(0, S.X - s.X)) - x)
-				oy = oy + (math.clamp(y, 0, math.max(0, S.Y - s.Y)) - y)
+				if moveX then
+					ox = ox + (math.clamp(x, 0, math.max(0, S.X - s.X)) - x)
+				end
+				if moveY then
+					oy = oy + (math.clamp(y, 0, math.max(0, S.Y - s.Y)) - y)
+				end
 			end
 			Root.Position = UDim2.new(startPos.X.Scale, ox, startPos.Y.Scale, oy)
 		end)
@@ -9404,6 +9489,12 @@ function Skibidi.CreateStatusHUD(Options)
 		autoScale = on == true
 		applyScale()
 	end
+	api.SetDragAxis = function(axis)
+		dragAxis = normAxis(axis)
+	end
+	api.GetDragAxis = function()
+		return dragAxis
+	end
 	api.SetPosition = function(pos)
 		if typeof(pos) == "UDim2" then
 			Root.Position = pos
@@ -9475,12 +9566,7 @@ function Skibidi.CreateStatusHUD(Options)
 	elseif type(tg) == "table" then
 		if tg.Gui ~= nil or tg.Target ~= nil or tg.Get ~= nil then
 			initial = { tg } -- a single panel / descriptor
-		elseif
-			tg.Targets ~= nil
-			or tg.Title ~= nil
-			or tg.Columns ~= nil
-			or tg.OnToggle ~= nil
-		then
+		elseif tg.Targets ~= nil or tg.Title ~= nil or tg.Columns ~= nil or tg.OnToggle ~= nil then
 			togglerOpts = tg
 			initial = tg.Targets or (source and { source }) or {}
 		else
