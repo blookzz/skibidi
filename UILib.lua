@@ -11,7 +11,7 @@
 local Skibidi = {}
 Skibidi.Brand = "skibidi"
 Skibidi.Name = "Skibidi UI"
-Skibidi.Version = "skibidi-2.3.0"
+Skibidi.Version = "skibidi-2.3.5"
 
 -- ============================================================
 -- SERVICES
