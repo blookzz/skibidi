@@ -11,7 +11,7 @@
 local Skibidi = {}
 Skibidi.Brand = "skibidi"
 Skibidi.Name = "Skibidi UI"
-Skibidi.Version = "skibidi-2.2.0"
+Skibidi.Version = "skibidi-2.3.0"
 
 -- ============================================================
 -- SERVICES
@@ -1542,6 +1542,20 @@ Skibidi.Flags = Flags
 -- Skibidi.Unload() can tear the whole UI down in one call.
 local _allGuis = {}
 
+-- ── Panel registry / title watchers ─────────────────────────
+-- Lets an optional StatusHUD find "the UI" it belongs to and follow its
+-- title and subtitle. Only holds references; costs nothing when unused.
+local _Hub = { panels = {}, watchers = {} }
+
+function _Hub.notify(panelGui, title, sub)
+	for i = #_Hub.watchers, 1, -1 do
+		local ok, keep = pcall(_Hub.watchers[i], panelGui, title, sub)
+		if not ok or keep == false then
+			table.remove(_Hub.watchers, i)
+		end
+	end
+end
+
 -- ── Tooltip ─────────────────────────────────────────────────
 -- One shared tooltip for the whole library. Components opt in with
 -- Options.Tooltip = "text"; it follows the mouse, clamps to the screen
@@ -2608,6 +2622,11 @@ end
 --   CloseMessage string    Dialog body text (optional)
 --   MinWidth / MinHeight / MaxWidth / MaxHeight   number
 --                          Per-axis overrides of the two above
+--   StatusHUD    bool | table   Also create an FPS / ping status HUD for
+--                          this panel (off by default). A table is passed
+--                          to Skibidi.CreateStatusHUD as its options; see
+--                          CreateStatusHUD below. Available afterwards
+--                          as the returned `StatusHUD`.
 --
 -- Returns:
 --   {
@@ -2622,8 +2641,8 @@ end
 --     SetVisible(bool), ToggleVisible(), IsVisible(),
 --     SetMinimized(bool), IsMinimized(), Close(), ConfirmClose(),
 --     SetSearchOpen(bool), IsSearchOpen(), SetSearch(text),
---     SetSize(w, h), GetSize(),
---     SearchBtn, ScaleBtn (nil when the option is off)
+--     SetSize(w, h), GetSize(), GetTitle(raw), GetSubTitle(raw),
+--     SearchBtn, ScaleBtn, StatusHUD (nil when the option is off)
 --   }
 -- ============================================================
 function Skibidi.CreatePanel(Options)
@@ -4261,7 +4280,8 @@ function Skibidi.CreatePanel(Options)
 	end
 
 	-- ── Return ─────────────────────────────────────────────
-	return {
+	local rawTitle, rawSub = Options.Title or "", Options.SubTitle or ""
+	local api = {
 		Gui = Gui,
 		Frame = Frame,
 		Header = Header,
@@ -4288,21 +4308,39 @@ function Skibidi.CreatePanel(Options)
 		end,
 		SetTitle = function(t)
 			plainTitle = SetText(TitleLabel, t or "")
+			rawTitle = t or ""
 			layoutTitle()
 			if isMinimized then
 				Frame.Size = UDim2.new(0, computeMinimizedWidth(), 0, HEADER_H)
 			end
+			_Hub.notify(Gui, rawTitle, rawSub)
 		end,
 		SetSubTitle = function(t)
 			if not SubLabel then
 				return
 			end
 			plainSubTitle = SetText(SubLabel, t or "")
+			rawSub = t or ""
 			SubPill.Visible = plainSubTitle ~= ""
 			layoutTitle()
 			if isMinimized then
 				Frame.Size = UDim2.new(0, computeMinimizedWidth(), 0, HEADER_H)
 			end
+			_Hub.notify(Gui, rawTitle, rawSub)
+		end,
+		-- raw = true returns the text as given (a "loc:" key stays a key),
+		-- so a follower can translate it itself.
+		GetTitle = function(raw)
+			if raw then
+				return rawTitle
+			end
+			return plainTitle
+		end,
+		GetSubTitle = function(raw)
+			if raw then
+				return rawSub
+			end
+			return plainSubTitle
 		end,
 		SetMinimized = SetMinimized,
 		IsMinimized = function()
@@ -4337,6 +4375,30 @@ function Skibidi.CreatePanel(Options)
 		Accent = Accent,
 		AccentDim = AccentDim,
 	}
+
+	table.insert(_Hub.panels, api)
+	Gui.Destroying:Connect(function()
+		for i, p in ipairs(_Hub.panels) do
+			if p == api then
+				table.remove(_Hub.panels, i)
+				break
+			end
+		end
+	end)
+
+	-- Optional status HUD (off unless asked for).
+	if Options.StatusHUD then
+		local hudOptions = {}
+		if type(Options.StatusHUD) == "table" then
+			for k, v in pairs(Options.StatusHUD) do
+				hudOptions[k] = v
+			end
+		end
+		hudOptions.Panel = hudOptions.Panel or api
+		api.StatusHUD = Skibidi.CreateStatusHUD(hudOptions)
+	end
+
+	return api
 end
 
 -- ============================================================
@@ -8308,6 +8370,1099 @@ function Skibidi.CreateKeyValue(Parent, Options)
 end
 
 -- ============================================================
+-- CreateStatusHUD
+-- A small always-on-top readout with live FPS and ping, styled like the
+-- rest of the library. Completely opt-in: nothing is created, connected
+-- or polled until you call it (or pass StatusHUD to CreatePanel), and a
+-- hidden HUD stops sampling.
+--
+--   local hud = Skibidi.CreateStatusHUD()                      -- stats only
+--   local hud = Skibidi.CreateStatusHUD({ Toggler = true })    -- + toggle the UI
+--   local win = Skibidi.CreatePanel({ Title = "Hub", StatusHUD = true })
+--
+-- By default the HUD takes its title and subtitle from the UI (the
+-- panel it is attached to, else the first live panel) and follows them if
+-- the panel renames itself. Setting Title / SubTitle yourself, in the
+-- options or through SetTitle / SetSubTitle, stops it following.
+--
+-- Options:
+--   Panel        panel API   The UI this HUD belongs to. Supplies the
+--                            default title, subtitle, accent and the
+--                            target of `Toggler = true`.
+--                            (default: the first live panel)
+--   Title        string|false  Heading. false hides it.
+--   SubTitle     string|false  Muted pill after the heading. false hides it.
+--   Visible      bool        Start shown                  (default true)
+--   ToggleKey    Enum.KeyCode | string   Hotkey that shows/hides the HUD
+--
+--   ShowFps / ShowPing   bool  Which readouts to show     (default true)
+--   FpsLabel / PingLabel string  Readout captions   (default "FPS"/"PING")
+--   ColorCode    bool        Green/amber/red by quality   (default true)
+--   FpsGood / FpsOk          numbers  FPS at/above = good / okay (55 / 30)
+--   PingGood / PingOk        numbers  ms at/below  = good / okay (80 / 150)
+--   UpdateRate   number      Seconds between refreshes    (default 0.5)
+--
+--   Toggler      the optional UI toggler section. Any of:
+--                  true                       toggle the attached panel
+--                  panel | ScreenGui | GuiObject    toggle that one thing
+--                  { panelA, panelB, ... }    one button each
+--                  { Targets = {...}, Title = "Windows", Columns = 3,
+--                    OnToggle = function(name, visible) end }
+--                A target can also be a descriptor:
+--                  { Name = "ESP", Icon = "eye", Target = x }
+--                  { Name = "Aimbot", Get = fn, Set = fn(bool) }
+--                Buttons light up while their target is visible.
+--
+--   Size         Vector2 | {w, h} | UDim2   Exact size in pixels
+--   Width / Height  number   Set one axis; the other stays automatic
+--   AutoScale    bool        Scale with the device's combined screen
+--                            width + height (default true, unless you set
+--                            Size / Width / Height - an explicit size is
+--                            honoured exactly)
+--   Scale        number      Extra multiplier on top           (default 1)
+--   MinScale / MaxScale      Auto-scale limits          (default 0.8 / 1.6)
+--   Position     UDim2       (default centred on X, near the top of Y)
+--   AnchorPoint  Vector2     (default 0.5, 0)
+--   Draggable    bool        Drag the HUD around          (default true)
+--   ClampToScreen bool       Keep it on screen while dragging (default true)
+--   Accent / AccentDim       Color3 overrides
+--   DisplayOrder number      (default 1)
+--   Parent       Instance    (default the library's default parent)
+--   Name         string      ScreenGui name   (default "SkibidiStatusHUD")
+--
+-- Returns:
+--   {
+--     Gui, Root, Frame, TitleLabel, SubTitleLabel,
+--     SetTitle(text|nil), SetSubTitle(text|nil), GetTitle(), GetSubTitle(),
+--     SetSize(w, h), SetScale(n), SetAutoScale(bool), SetPosition(UDim2),
+--     SetVisible(bool), ToggleVisible(), IsVisible(), Destroy(),
+--     SetShowFps(bool), SetShowPing(bool), GetFps(), GetPing(),
+--     AddToggle(target) -> { Button, Refresh(), Remove() },
+--     RemoveToggle(handle), ClearToggles(), SetToggleTargets(list)
+--   }
+-- Passing nil to SetTitle / SetSubTitle goes back to following the panel.
+-- ============================================================
+function Skibidi.CreateStatusHUD(Options)
+	Options = Options or {}
+	local StatsService = game:GetService("Stats")
+
+	-- ── Source UI ───────────────────────────────────────────
+	local function livePanel(p)
+		return type(p) == "table" and typeof(p.Gui) == "Instance" and p.Gui.Parent ~= nil
+	end
+	local source = livePanel(Options.Panel) and Options.Panel or nil
+	if not source then
+		for _, p in ipairs(_Hub.panels) do
+			if livePanel(p) then
+				source = p
+				break
+			end
+		end
+	end
+
+	local Accent = Options.Accent or (source and source.Accent) or Theme.Accent
+	local AccentDim = Options.AccentDim
+		or (Options.Accent and Darken(Options.Accent, 0.35))
+		or (source and source.AccentDim)
+		or Theme.AccentDim
+
+	-- ── Settings ────────────────────────────────────────────
+	local colorCode = Options.ColorCode ~= false
+	local fpsGood, fpsOk = Options.FpsGood or 55, Options.FpsOk or 30
+	local pingGood, pingOk = Options.PingGood or 80, Options.PingOk or 150
+	local updateRate = math.max(Options.UpdateRate or 0.5, 0.05)
+	local GAP = 6 -- gap between chips / buttons
+	local PAD_X, PAD_Y = 10, 8
+	local CELL_H = 24 -- toggle button height
+
+	local function parseSize(s)
+		if typeof(s) == "Vector2" then
+			return s.X, s.Y
+		elseif typeof(s) == "UDim2" then
+			return s.X.Offset, s.Y.Offset
+		elseif type(s) == "table" then
+			return s[1] or s.Width or s.X, s[2] or s.Height or s.Y
+		elseif type(s) == "number" then
+			return s, nil
+		end
+		return nil, nil
+	end
+	local fixedW, fixedH
+	if Options.Size ~= nil then
+		fixedW, fixedH = parseSize(Options.Size)
+	end
+	fixedW = Options.Width or fixedW
+	fixedH = Options.Height or fixedH
+
+	local autoScale
+	if Options.AutoScale ~= nil then
+		autoScale = Options.AutoScale == true
+	else
+		autoScale = not (fixedW or fixedH)
+	end
+	local manualScale = Options.Scale or 1
+	local minScale, maxScale = Options.MinScale or 0.8, Options.MaxScale or 1.6
+
+	local showFps = Options.ShowFps ~= false
+	local showPing = Options.ShowPing ~= false
+
+	-- ── Title / subtitle (follow the UI unless overridden) ──
+	local function str(v)
+		if v == nil or v == false then
+			return ""
+		end
+		return tostring(v)
+	end
+	local titleOverride = Options.Title ~= nil
+	local subOverride = Options.SubTitle ~= nil
+	local titleRaw, subRaw
+	if titleOverride then
+		titleRaw = str(Options.Title)
+	else
+		titleRaw = source and source.GetTitle and source.GetTitle(true) or Skibidi.Name
+	end
+	if subOverride then
+		subRaw = str(Options.SubTitle)
+	else
+		subRaw = source and source.GetSubTitle and source.GetSubTitle(true) or ""
+	end
+
+	-- ── Text measuring ──────────────────────────────────────
+	local function measure(text, size, font)
+		if not text or text == "" then
+			return 0
+		end
+		local ok, b = pcall(TextService.GetTextSize, TextService, text, size, font, Vector2.new(4000, 100))
+		return (ok and b and b.X) or (#text * size * 0.55)
+	end
+
+	-- ── ScreenGui ───────────────────────────────────────────
+	local Gui = Instance.new("ScreenGui")
+	Gui.Name = Options.Name or "SkibidiStatusHUD"
+	Gui.ResetOnSpawn = false
+	Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	Gui.DisplayOrder = Options.DisplayOrder or 1
+	Gui.Enabled = Options.Visible ~= false
+	Gui.Parent = Options.Parent or DefaultParent
+	table.insert(_allGuis, Gui)
+
+	local function screenSize()
+		local a = Gui.AbsoluteSize
+		if a.X > 0 and a.Y > 0 then
+			return a
+		end
+		local cam = workspace.CurrentCamera
+		return cam and cam.ViewportSize or Vector2.new(1920, 1080)
+	end
+
+	-- Root carries position, anchor and the device scale; Card is the visible
+	-- surface. Shadows and bloom are siblings of Card (inside Layers), so
+	-- the card never has to clip, and a UIScale on Root scales all of it.
+	local Root = Instance.new("Frame")
+	Root.Name = "Root"
+	Root.AnchorPoint = Options.AnchorPoint or Vector2.new(0.5, 0)
+	Root.Position = Options.Position or UDim2.new(0.5, 0, 0, 10)
+	Root.Size = UDim2.new(0, 240, 0, 0)
+	Root.BackgroundTransparency = 1
+	Root.BorderSizePixel = 0
+	Root.Parent = Gui
+
+	local ScaleObj = Instance.new("UIScale")
+	ScaleObj.Parent = Root
+
+	local Layers = Instance.new("Frame")
+	Layers.Name = "Layers"
+	Layers.Size = UDim2.new(1, 0, 1, 0)
+	Layers.BackgroundTransparency = 1
+	Layers.BorderSizePixel = 0
+	Layers.ZIndex = 0
+	Layers.Parent = Root
+
+	local function makeLayer(image, color, pad, alpha, drop)
+		local L = Instance.new("ImageLabel")
+		L.BackgroundTransparency = 1
+		L.Image = image
+		L.ImageColor3 = color
+		L.ImageTransparency = alpha
+		L.ScaleType = Enum.ScaleType.Slice
+		L.SliceCenter = Rect.new(49, 49, 450, 450)
+		L.Position = UDim2.new(0, -pad, 0, -pad + drop)
+		L.Size = UDim2.new(1, pad * 2, 1, pad * 2)
+		L.ZIndex = 0
+		L.Parent = Layers
+		return L
+	end
+	local elev = Theme.Elevation or 0.38
+	makeLayer(Theme.ShadowAsset, Color3.new(0, 0, 0), 30, math.clamp(elev + 0.26, 0, 1), 10)
+	makeLayer(Theme.ShadowAsset, Color3.new(0, 0, 0), 12, elev, 3)
+	if Theme.Glow then
+		makeLayer(Theme.ShadowAsset, Accent, 22, 0.88, 0)
+	end
+
+	local Card = Instance.new("Frame")
+	Card.Name = "Card"
+	Card.Size = UDim2.new(1, 0, 0, 0)
+	Card.AutomaticSize = Enum.AutomaticSize.Y
+	Card.BackgroundColor3 = Theme.Bg1
+	Card.BackgroundTransparency = 0.04
+	Card.BorderSizePixel = 0
+	Card.Active = true
+	Card.ZIndex = 1
+	Card.Parent = Root
+	MakeCorner(Card, UDim.new(0, Theme.CornerRadius))
+	MakeAnimatedStroke(Card, Accent, 1.4)
+	MakeGlass(Card, 0.14)
+	do
+		local grain = MakeGrain(Card)
+		if grain then
+			MakeCorner(grain, UDim.new(0, Theme.CornerRadius))
+		end
+	end
+	MakePadding(Card, PAD_X, PAD_X, PAD_Y, PAD_Y)
+	-- Everything sits on one vertical axis, centred. With a fixed height the
+	-- stack centres vertically too instead of hugging the top.
+	MakeListLayout(Card, Enum.FillDirection.Vertical, 7, Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Center)
+
+	-- Entrance pop, on the card so the shadow does not fight it.
+	local PopScale = Instance.new("UIScale")
+	PopScale.Scale = 0.92
+	PopScale.Parent = Card
+	TweenService:Create(PopScale, TweenSpring, { Scale = 1 }):Play()
+
+	local api = {}
+
+	-- ── Header: pip + title + subtitle pill, centred ────────
+	local Header = Instance.new("Frame")
+	Header.Name = "Header"
+	Header.LayoutOrder = 1
+	Header.Size = UDim2.new(1, 0, 0, 20)
+	Header.BackgroundTransparency = 1
+	Header.BorderSizePixel = 0
+	Header.ZIndex = 2
+	Header.Parent = Card
+	MakeListLayout(Header, Enum.FillDirection.Horizontal, 8, Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Center)
+
+	local Pip = Instance.new("Frame")
+	Pip.LayoutOrder = 1
+	Pip.Size = UDim2.new(0, 3, 0, 14)
+	Pip.BackgroundColor3 = Accent
+	Pip.BorderSizePixel = 0
+	Pip.ZIndex = 3
+	Pip.Parent = Header
+	MakeCorner(Pip, UDim.new(1, 0))
+	MakeAccentFill(Pip, Accent)
+
+	local TitleLabel = Instance.new("TextLabel")
+	TitleLabel.LayoutOrder = 2
+	TitleLabel.AutomaticSize = Enum.AutomaticSize.X
+	TitleLabel.Size = UDim2.new(0, 0, 1, 0)
+	TitleLabel.BackgroundTransparency = 1
+	TitleLabel.Font = Theme.FontBold
+	TitleLabel.TextSize = Theme.TitleSize
+	TitleLabel.TextColor3 = Theme.AccentSec
+	TitleLabel.TextXAlignment = Enum.TextXAlignment.Center
+	TitleLabel.TextYAlignment = Enum.TextYAlignment.Center
+	TitleLabel.TextTruncate = Enum.TextTruncate.AtEnd
+	TitleLabel.ZIndex = 3
+	TitleLabel.Parent = Header
+	local TitleLimit = Instance.new("UISizeConstraint")
+	TitleLimit.MaxSize = Vector2.new(1000, 1000)
+	TitleLimit.Parent = TitleLabel
+	do
+		local a, b = AccentPair(Accent)
+		local g = Instance.new("UIGradient")
+		g.Color = ColorSequence.new(Lighten(a, 0.28), Lighten(b, 0.12))
+		g.Rotation = 90
+		g.Parent = TitleLabel
+	end
+
+	local SubPill = Instance.new("Frame")
+	SubPill.LayoutOrder = 3
+	SubPill.AutomaticSize = Enum.AutomaticSize.X
+	SubPill.Size = UDim2.new(0, 0, 0, 16)
+	SubPill.BackgroundColor3 = Theme.Bg2
+	SubPill.BackgroundTransparency = 0.15
+	SubPill.BorderSizePixel = 0
+	SubPill.ZIndex = 3
+	SubPill.Parent = Header
+	MakeCorner(SubPill, UDim.new(1, 0))
+	MakeEdge(SubPill, AccentDim, 1)
+	MakeGloss(SubPill, 0.10)
+	MakePadding(SubPill, 7, 7, 0, 0)
+
+	local SubLabel = Instance.new("TextLabel")
+	SubLabel.AutomaticSize = Enum.AutomaticSize.X
+	SubLabel.Size = UDim2.new(0, 0, 1, 0)
+	SubLabel.BackgroundTransparency = 1
+	SubLabel.Font = Theme.FontMedium
+	SubLabel.TextSize = Theme.CaptionSize
+	SubLabel.TextColor3 = Theme.TextMuted
+	SubLabel.TextXAlignment = Enum.TextXAlignment.Center
+	SubLabel.TextYAlignment = Enum.TextYAlignment.Center
+	SubLabel.ZIndex = 4
+	SubLabel.Parent = SubPill
+
+	local function makeRule(parent, order)
+		local R = Instance.new("Frame")
+		R.Name = "Rule"
+		R.LayoutOrder = order
+		R.Size = UDim2.new(1, -8, 0, 1)
+		R.BackgroundColor3 = Lighten(Accent, 0.10)
+		R.BackgroundTransparency = 0.35
+		R.BorderSizePixel = 0
+		R.ZIndex = 3
+		R.Parent = parent
+		local g = Instance.new("UIGradient")
+		g.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0.00, 1),
+			NumberSequenceKeypoint.new(0.18, 0),
+			NumberSequenceKeypoint.new(0.82, 0),
+			NumberSequenceKeypoint.new(1.00, 1),
+		})
+		g.Parent = R
+		return R
+	end
+	local HeaderRule = makeRule(Card, 2)
+
+	-- ── Stats row ───────────────────────────────────────────
+	local StatsRow = Instance.new("Frame")
+	StatsRow.Name = "Stats"
+	StatsRow.LayoutOrder = 3
+	StatsRow.Size = UDim2.new(1, 0, 0, 26)
+	StatsRow.BackgroundTransparency = 1
+	StatsRow.BorderSizePixel = 0
+	StatsRow.ZIndex = 2
+	StatsRow.Parent = Card
+	MakeListLayout(StatsRow, Enum.FillDirection.Horizontal, GAP, Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Center)
+
+	local stats = {}
+	local function makeStat(order, caption, sample)
+		local Chip = Instance.new("Frame")
+		Chip.Name = "Stat"
+		Chip.LayoutOrder = order
+		Chip.BackgroundColor3 = Theme.Bg2
+		Chip.BorderSizePixel = 0
+		Chip.ZIndex = 2
+		Chip.Parent = StatsRow
+		MakeCorner(Chip, UDim.new(0, Theme.CornerRadiusXs))
+		MakeEdge(Chip, AccentDim, 1)
+		MakeGloss(Chip, 0.10)
+
+		-- The dot, caption and value are one centred group, so the content
+		-- sits in the middle of the chip whatever its width. The value has a
+		-- fixed width so the group does not shift as the numbers change.
+		local Group = Instance.new("Frame")
+		Group.AnchorPoint = Vector2.new(0.5, 0.5)
+		Group.Position = UDim2.new(0.5, 0, 0.5, 0)
+		Group.Size = UDim2.new(0, 0, 1, 0)
+		Group.AutomaticSize = Enum.AutomaticSize.X
+		Group.BackgroundTransparency = 1
+		Group.ZIndex = 3
+		Group.Parent = Chip
+		MakeListLayout(Group, Enum.FillDirection.Horizontal, 6, Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Center)
+
+		local Dot = Instance.new("Frame")
+		Dot.LayoutOrder = 1
+		Dot.Size = UDim2.new(0, 6, 0, 6)
+		Dot.BackgroundColor3 = Accent
+		Dot.BorderSizePixel = 0
+		Dot.ZIndex = 4
+		Dot.Parent = Group
+		MakeCorner(Dot, UDim.new(1, 0))
+
+		local Key = Instance.new("TextLabel")
+		Key.LayoutOrder = 2
+		Key.AutomaticSize = Enum.AutomaticSize.X
+		Key.Size = UDim2.new(0, 0, 0, 16)
+		Key.BackgroundTransparency = 1
+		Key.Font = Theme.FontMedium
+		Key.TextSize = Theme.CaptionSize
+		Key.TextColor3 = Theme.TextMuted
+		Key.TextXAlignment = Enum.TextXAlignment.Center
+		Key.TextYAlignment = Enum.TextYAlignment.Center
+		Key.ZIndex = 4
+		Key.Parent = Group
+		SetText(Key, caption)
+
+		local Val = Instance.new("TextLabel")
+		Val.LayoutOrder = 3
+		Val.Size = UDim2.new(0, math.ceil(measure(sample, Theme.SmallSize, Theme.FontBold)) + 2, 0, 16)
+		Val.BackgroundTransparency = 1
+		Val.Font = Theme.FontBold
+		Val.TextSize = Theme.SmallSize
+		Val.TextColor3 = Theme.AccentSec
+		Val.TextXAlignment = Enum.TextXAlignment.Center
+		Val.TextYAlignment = Enum.TextYAlignment.Center
+		Val.Text = "--"
+		Val.ZIndex = 4
+		Val.Parent = Group
+
+		return { Chip = Chip, Dot = Dot, Val = Val, Color = nil }
+	end
+	stats.fps = makeStat(1, Options.FpsLabel or "FPS", "888")
+	stats.ping = makeStat(2, Options.PingLabel or "PING", "888ms")
+
+	local function relayoutStats()
+		stats.fps.Chip.Visible = showFps
+		stats.ping.Chip.Visible = showPing
+		local n = (showFps and 1 or 0) + (showPing and 1 or 0)
+		StatsRow.Visible = n > 0
+		if n == 0 then
+			return
+		end
+		local size = UDim2.new(1 / n, -(GAP * (n - 1)) / n, 1, 0)
+		stats.fps.Chip.Size = size
+		stats.ping.Chip.Size = size
+	end
+
+	-- ── Layout: width, title limits, header visibility ──────
+	local baseW = 240
+	local togglerSection, togglerGrid, relayoutToggles -- built on demand
+
+	local function headerShown()
+		return titleRaw ~= "" or subRaw ~= ""
+	end
+
+	local function computeWidth()
+		if fixedW then
+			return math.max(fixedW, 120)
+		end
+		local tw = measure(TitleLabel.Text, Theme.TitleSize, Theme.FontBold)
+		local sw = SubLabel.Text ~= "" and (measure(SubLabel.Text, Theme.CaptionSize, Theme.FontMedium) + 14 + 8) or 0
+		local need = PAD_X * 2 + (TitleLabel.Text ~= "" and (11 + tw + 4) or 0) + sw
+		return math.clamp(math.ceil(need), 230, 420)
+	end
+
+	local function relayout()
+		TitleLabel.Visible = TitleLabel.Text ~= ""
+		Pip.Visible = TitleLabel.Text ~= ""
+		SubPill.Visible = SubLabel.Text ~= ""
+		Header.Visible = headerShown()
+		HeaderRule.Visible = headerShown() and (StatsRow.Visible or (togglerSection and togglerSection.Visible) or false)
+
+		baseW = computeWidth()
+		Root.Size = UDim2.new(0, baseW, 0, fixedH or 0)
+		Root.AutomaticSize = fixedH and Enum.AutomaticSize.None or Enum.AutomaticSize.Y
+		Card.Size = fixedH and UDim2.new(1, 0, 1, 0) or UDim2.new(1, 0, 0, 0)
+		Card.AutomaticSize = fixedH and Enum.AutomaticSize.None or Enum.AutomaticSize.Y
+
+		-- A long title truncates inside the card instead of spilling out.
+		local subW = SubPill.Visible and (measure(SubLabel.Text, Theme.CaptionSize, Theme.FontMedium) + 14 + 8) or 0
+		local avail = baseW - PAD_X * 2 - (Pip.Visible and 11 or 0) - subW - 2
+		TitleLimit.MaxSize = Vector2.new(math.max(avail, 20), 1000)
+
+		if relayoutToggles then
+			relayoutToggles()
+		end
+	end
+
+	local function setTitleText(raw)
+		titleRaw = raw
+		SetText(TitleLabel, raw)
+		relayout()
+	end
+	local function setSubText(raw)
+		subRaw = raw
+		SetText(SubLabel, raw)
+		relayout()
+	end
+
+	-- ── Scale ───────────────────────────────────────────────
+	local function applyScale()
+		local k = manualScale
+		if autoScale then
+			local s = screenSize()
+			k = k * math.clamp((s.X + s.Y) / 3000, minScale, maxScale)
+		end
+		ScaleObj.Scale = k
+	end
+	Gui:GetPropertyChangedSignal("AbsoluteSize"):Connect(applyScale)
+
+	-- ── UI toggler (optional, built on demand) ──────────────
+	local entries = {}
+	local togglerOpts = {}
+	local onToggle
+
+	local function parseTarget(spec)
+		if spec == nil then
+			return nil
+		end
+		local d = {}
+		local target = spec
+		if type(spec) == "table" and spec.Gui == nil then
+			d.Name = spec.Name or spec.Title or spec.Label
+			d.Icon = spec.Icon
+			d.Get, d.Set = spec.Get, spec.Set
+			target = spec.Target
+		end
+		if d.Get == nil or d.Set == nil then
+			if type(target) == "table" and typeof(target.Gui) == "Instance" then
+				local g = target.Gui
+				d.Owner, d.Prop = g, "Enabled"
+				d.Get = function()
+					return g.Enabled
+				end
+				d.Set = function(on)
+					if target.SetVisible then
+						target.SetVisible(on)
+					else
+						g.Enabled = on
+					end
+				end
+				d.Name = d.Name or (target.GetTitle and target.GetTitle(true))
+			elseif typeof(target) == "Instance" then
+				local prop = target:IsA("LayerCollector") and "Enabled" or "Visible"
+				d.Owner, d.Prop = target, prop
+				d.Get = function()
+					return target[prop]
+				end
+				d.Set = function(on)
+					target[prop] = on
+				end
+				d.Name = d.Name or target.Name
+			else
+				return nil
+			end
+		end
+		if d.Name == nil or d.Name == "" then
+			d.Name = "UI"
+		end
+		return d
+	end
+
+	local function ensureToggler()
+		if togglerSection then
+			return
+		end
+		togglerSection = Instance.new("Frame")
+		togglerSection.Name = "Toggler"
+		togglerSection.LayoutOrder = 4
+		togglerSection.Size = UDim2.new(1, 0, 0, 0)
+		togglerSection.AutomaticSize = Enum.AutomaticSize.Y
+		togglerSection.BackgroundTransparency = 1
+		togglerSection.BorderSizePixel = 0
+		togglerSection.ZIndex = 2
+		togglerSection.Visible = false
+		togglerSection.Parent = Card
+		MakeListLayout(togglerSection, Enum.FillDirection.Vertical, 6, Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Top)
+
+		makeRule(togglerSection, 1)
+
+		if togglerOpts.Title and togglerOpts.Title ~= "" then
+			local Cap = Instance.new("TextLabel")
+			Cap.LayoutOrder = 2
+			Cap.Size = UDim2.new(1, 0, 0, 14)
+			Cap.BackgroundTransparency = 1
+			Cap.Font = Theme.FontMedium
+			Cap.TextSize = Theme.CaptionSize
+			Cap.TextColor3 = Theme.TextMuted
+			Cap.TextXAlignment = Enum.TextXAlignment.Center
+			Cap.TextYAlignment = Enum.TextYAlignment.Center
+			Cap.TextTruncate = Enum.TextTruncate.AtEnd
+			Cap.ZIndex = 3
+			Cap.Parent = togglerSection
+			SetText(Cap, togglerOpts.Title)
+		end
+
+		togglerGrid = Instance.new("Frame")
+		togglerGrid.Name = "Grid"
+		togglerGrid.LayoutOrder = 3
+		togglerGrid.Size = UDim2.new(1, 0, 0, CELL_H)
+		togglerGrid.BackgroundTransparency = 1
+		togglerGrid.BorderSizePixel = 0
+		togglerGrid.ZIndex = 2
+		togglerGrid.Parent = togglerSection
+		local gl = Instance.new("UIGridLayout")
+		gl.SortOrder = Enum.SortOrder.LayoutOrder
+		gl.FillDirection = Enum.FillDirection.Horizontal
+		gl.HorizontalAlignment = Enum.HorizontalAlignment.Center
+		gl.VerticalAlignment = Enum.VerticalAlignment.Top
+		gl.CellPadding = UDim2.new(0, GAP, 0, GAP)
+		gl.Parent = togglerGrid
+
+		relayoutToggles = function()
+			local n = #entries
+			togglerSection.Visible = n > 0
+			if n == 0 then
+				return
+			end
+			local cols = togglerOpts.Columns or (n >= 3 and 3 or n)
+			cols = math.max(1, math.min(cols, n))
+			gl.CellSize = UDim2.new(1 / cols, -(GAP * (cols - 1)) / cols, 0, CELL_H)
+			gl.FillDirectionMaxCells = cols
+			local rows = math.ceil(n / cols)
+			togglerGrid.Size = UDim2.new(1, 0, 0, rows * CELL_H + (rows - 1) * GAP)
+
+			-- Each label gets exactly the room its cell has, so a long name
+			-- truncates inside the button rather than overflowing it.
+			local cellPx = (baseW - PAD_X * 2 - GAP * (cols - 1)) / cols
+			for _, e in ipairs(entries) do
+				local room = cellPx - 12 - 6 - 6 - (e.Icon and 20 or 0)
+				local want = math.ceil(measure(e.Label.Text, Theme.CaptionSize, Theme.FontMedium)) + 2
+				e.Label.Size = UDim2.new(0, math.max(10, math.min(want, room)), 0, 16)
+			end
+		end
+	end
+
+	local function buildToggle(d)
+		ensureToggler()
+		local Btn = Instance.new("TextButton")
+		Btn.Name = "Toggle"
+		Btn.LayoutOrder = #entries + 1
+		Btn.Text = ""
+		Btn.AutoButtonColor = false
+		Btn.BackgroundColor3 = Theme.Bg2
+		Btn.BorderSizePixel = 0
+		Btn.ZIndex = 3
+		Btn.Parent = togglerGrid
+		MakeCorner(Btn, UDim.new(0, Theme.CornerRadiusXs))
+		local edge = MakeEdge(Btn, AccentDim, 1)
+		MakeGloss(Btn, 0.10)
+		MakeRipple(Btn, Theme.AccentSec, Theme.CornerRadiusXs)
+
+		local press = Instance.new("UIScale")
+		press.Parent = Btn
+
+		local Group = Instance.new("Frame")
+		Group.AnchorPoint = Vector2.new(0.5, 0.5)
+		Group.Position = UDim2.new(0.5, 0, 0.5, 0)
+		Group.Size = UDim2.new(0, 0, 1, 0)
+		Group.AutomaticSize = Enum.AutomaticSize.X
+		Group.BackgroundTransparency = 1
+		Group.ZIndex = 4
+		Group.Parent = Btn
+		MakeListLayout(Group, Enum.FillDirection.Horizontal, 6, Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Center)
+
+		local Dot = Instance.new("Frame")
+		Dot.LayoutOrder = 1
+		Dot.Size = UDim2.new(0, 6, 0, 6)
+		Dot.BackgroundColor3 = Theme.TextMuted
+		Dot.BorderSizePixel = 0
+		Dot.ZIndex = 5
+		Dot.Parent = Group
+		MakeCorner(Dot, UDim.new(1, 0))
+
+		local IconLbl
+		if d.Icon then
+			IconLbl = MakeIcon(Group, d.Icon, 14, Theme.TextPrimary, 5)
+			IconLbl.LayoutOrder = 2
+		end
+
+		local Label = Instance.new("TextLabel")
+		Label.LayoutOrder = 3
+		Label.Size = UDim2.new(0, 40, 0, 16)
+		Label.BackgroundTransparency = 1
+		Label.Font = Theme.FontMedium
+		Label.TextSize = Theme.CaptionSize
+		Label.TextColor3 = Theme.TextPrimary
+		Label.TextXAlignment = Enum.TextXAlignment.Center
+		Label.TextYAlignment = Enum.TextYAlignment.Center
+		Label.TextTruncate = Enum.TextTruncate.AtEnd
+		Label.ZIndex = 5
+		Label.Parent = Group
+		SetText(Label, d.Name)
+
+		local e = { Button = Btn, Label = Label, Icon = d.Icon, Desc = d, Alive = true, On = nil }
+
+		local function paint(animate)
+			local alive = true
+			if d.Owner and d.Owner.Parent == nil then
+				alive = false
+			end
+			local on = false
+			if alive then
+				local ok, v = pcall(d.Get)
+				on = ok and v == true
+			end
+			if alive == e.Alive and on == e.On then
+				return
+			end
+			e.Alive, e.On = alive, on
+			local bg = on and Mix(Theme.Bg2, Accent, 0.18) or Theme.Bg2
+			local dot = on and Accent or Theme.TextMuted
+			local txt = on and Theme.ActiveTabText or (alive and Theme.TextPrimary or Theme.TextMuted)
+			local edgeColor = on and Accent or EdgeRest()
+			local edgeAlpha = on and 0 or (Theme.StrokeAlpha or 0.34)
+			if animate then
+				TweenService:Create(Btn, TweenFast, { BackgroundColor3 = bg }):Play()
+				TweenService:Create(Dot, TweenFast, { BackgroundColor3 = dot }):Play()
+				TweenService:Create(Label, TweenFast, { TextColor3 = txt }):Play()
+				TweenService:Create(edge, TweenFast, { Color = edgeColor, Transparency = edgeAlpha }):Play()
+			else
+				Btn.BackgroundColor3, Dot.BackgroundColor3, Label.TextColor3 = bg, dot, txt
+				edge.Color, edge.Transparency = edgeColor, edgeAlpha
+			end
+			if IconLbl then
+				IconLbl.ImageColor3 = txt
+			end
+		end
+		e.Refresh = function()
+			paint(true)
+		end
+
+		Btn.MouseEnter:Connect(function()
+			if e.Alive and not e.On then
+				TweenService:Create(Btn, TweenFast, { BackgroundColor3 = Theme.Hover }):Play()
+			end
+		end)
+		Btn.MouseLeave:Connect(function()
+			if e.Alive and not e.On then
+				TweenService:Create(Btn, TweenFast, { BackgroundColor3 = Theme.Bg2 }):Play()
+			end
+		end)
+		Btn.MouseButton1Down:Connect(function()
+			TweenService:Create(press, TweenSnap, { Scale = 0.94 }):Play()
+		end)
+		Btn.MouseButton1Up:Connect(function()
+			TweenService:Create(press, TweenPop, { Scale = 1 }):Play()
+		end)
+		Btn.MouseButton1Click:Connect(function()
+			paint(false)
+			if not e.Alive then
+				return
+			end
+			local ok, cur = pcall(d.Get)
+			local want = not (ok and cur == true)
+			pcall(d.Set, want)
+			paint(true)
+			if onToggle then
+				task.spawn(onToggle, d.Name, want)
+			end
+		end)
+		-- React the moment the target changes (hotkey, its own close button),
+		-- not just on the next poll.
+		if d.Owner then
+			d.Owner:GetPropertyChangedSignal(d.Prop):Connect(function()
+				paint(true)
+			end)
+			d.Owner.AncestryChanged:Connect(function()
+				paint(true)
+			end)
+		end
+
+		table.insert(entries, e)
+		paint(false)
+		e.Remove = function()
+			for i, x in ipairs(entries) do
+				if x == e then
+					table.remove(entries, i)
+					break
+				end
+			end
+			Btn:Destroy()
+			for i, x in ipairs(entries) do
+				x.Button.LayoutOrder = i
+			end
+			relayout()
+		end
+		relayout()
+		return e
+	end
+
+	-- ── Sampling ────────────────────────────────────────────
+	local fpsNow, pingNow = 0, nil
+
+	local function readPing()
+		local ok, v = pcall(function()
+			return StatsService.Network.ServerStatsItem["Data Ping"]:GetValue()
+		end)
+		if ok and type(v) == "number" and v > 0 then
+			return v
+		end
+		local ok2, p = pcall(function()
+			return LocalPlayer:GetNetworkPing()
+		end)
+		if ok2 and type(p) == "number" then
+			return p * 2000 -- one-way seconds -> round-trip ms
+		end
+		return nil
+	end
+
+	local function statusColor(kind, v)
+		if not colorCode then
+			return Theme.AccentSec, Accent
+		end
+		local c
+		if kind == "fps" then
+			c = v >= fpsGood and Theme.Success or (v >= fpsOk and Theme.Warning or Theme.Danger)
+		else
+			c = v <= pingGood and Theme.Success or (v <= pingOk and Theme.Warning or Theme.Danger)
+		end
+		return c, c
+	end
+
+	local function setStat(stat, kind, text, v)
+		stat.Val.Text = text
+		local textColor, dotColor = statusColor(kind, v)
+		if stat.Color ~= textColor then
+			stat.Color = textColor
+			TweenService:Create(stat.Val, TweenFast, { TextColor3 = textColor }):Play()
+			TweenService:Create(stat.Dot, TweenFast, { BackgroundColor3 = dotColor }):Play()
+		end
+	end
+
+	local frames, acc = 0, 0
+	ConnectScoped(Gui, RunService.RenderStepped, function(dt)
+		if not Gui.Enabled then
+			frames, acc = 0, 0
+			return
+		end
+		frames = frames + 1
+		acc = acc + dt
+		if acc < updateRate then
+			return
+		end
+		fpsNow = frames / acc
+		frames, acc = 0, 0
+		if showFps then
+			setStat(stats.fps, "fps", tostring(math.floor(fpsNow + 0.5)), fpsNow)
+		end
+		if showPing then
+			pingNow = readPing()
+			if pingNow then
+				setStat(stats.ping, "ping", math.min(math.floor(pingNow + 0.5), 9999) .. "ms", pingNow)
+			end
+		end
+		for _, e in ipairs(entries) do
+			e.Refresh()
+		end
+	end)
+
+	-- ── Dragging (anywhere on the card; buttons keep their clicks) ──
+	if Options.Draggable ~= false then
+		local clampToScreen = Options.ClampToScreen ~= false
+		local dragging, dragStart, startPos = false, nil, nil
+		Card.InputBegan:Connect(function(inp)
+			if
+				inp.UserInputType ~= Enum.UserInputType.MouseButton1
+				and inp.UserInputType ~= Enum.UserInputType.Touch
+			then
+				return
+			end
+			dragging = true
+			dragStart = inp.Position
+			startPos = Root.Position
+			inp.Changed:Connect(function()
+				if inp.UserInputState == Enum.UserInputState.End then
+					dragging = false
+				end
+			end)
+		end)
+		ConnectScoped(Gui, UserInputService.InputChanged, function(inp)
+			if not dragging then
+				return
+			end
+			if
+				inp.UserInputType ~= Enum.UserInputType.MouseMovement
+				and inp.UserInputType ~= Enum.UserInputType.Touch
+			then
+				return
+			end
+			local d = inp.Position - dragStart
+			local ox, oy = startPos.X.Offset + d.X, startPos.Y.Offset + d.Y
+			if clampToScreen then
+				-- Work out where the top-left corner lands (anchor point and
+				-- scale included) and pull it back inside the screen.
+				local S, s, a = screenSize(), Root.AbsoluteSize, Root.AnchorPoint
+				local x = startPos.X.Scale * S.X + ox - a.X * s.X
+				local y = startPos.Y.Scale * S.Y + oy - a.Y * s.Y
+				ox = ox + (math.clamp(x, 0, math.max(0, S.X - s.X)) - x)
+				oy = oy + (math.clamp(y, 0, math.max(0, S.Y - s.Y)) - y)
+			end
+			Root.Position = UDim2.new(startPos.X.Scale, ox, startPos.Y.Scale, oy)
+		end)
+	end
+
+	-- ── Hotkey ──────────────────────────────────────────────
+	do
+		local tk = Options.ToggleKey
+		if type(tk) == "string" then
+			local ok, parsed = pcall(function()
+				return Enum.KeyCode[tk]
+			end)
+			tk = ok and parsed or nil
+		end
+		if typeof(tk) == "EnumItem" then
+			ConnectScoped(Gui, UserInputService.InputBegan, function(inp, gameProcessed)
+				if gameProcessed then
+					return
+				end
+				if inp.UserInputType == Enum.UserInputType.Keyboard and inp.KeyCode == tk then
+					Gui.Enabled = not Gui.Enabled
+				end
+			end)
+		end
+	end
+
+	-- ── Follow the UI's title unless the caller took over ───
+	if source and not (titleOverride and subOverride) then
+		table.insert(_Hub.watchers, function(panelGui, t, s)
+			if not Gui.Parent then
+				return false -- HUD is gone: drop this watcher
+			end
+			if panelGui ~= source.Gui then
+				return true
+			end
+			if not titleOverride then
+				setTitleText(t)
+			end
+			if not subOverride then
+				setSubText(s)
+			end
+			return true
+		end)
+	end
+
+	-- ── API ─────────────────────────────────────────────────
+	api.Gui = Gui
+	api.Root = Root
+	api.Frame = Card
+	api.TitleLabel = TitleLabel
+	api.SubTitleLabel = SubLabel
+	api.SetTitle = function(text)
+		if text == nil then
+			titleOverride = false
+			text = source and source.GetTitle and source.GetTitle(true) or Skibidi.Name
+		else
+			titleOverride = true
+		end
+		setTitleText(str(text))
+	end
+	api.SetSubTitle = function(text)
+		if text == nil then
+			subOverride = false
+			text = source and source.GetSubTitle and source.GetSubTitle(true) or ""
+		else
+			subOverride = true
+		end
+		setSubText(str(text))
+	end
+	api.GetTitle = function()
+		return TitleLabel.Text
+	end
+	api.GetSubTitle = function()
+		return SubLabel.Text
+	end
+	-- SetSize(w, h): pixels, either may be nil to go back to automatic.
+	-- Giving an explicit size turns auto-scaling off unless SetAutoScale(true)
+	-- is called afterwards.
+	api.SetSize = function(w, h)
+		fixedW, fixedH = w, h
+		if w or h then
+			autoScale = false
+		end
+		relayout()
+		applyScale()
+	end
+	api.SetScale = function(n)
+		manualScale = tonumber(n) or 1
+		applyScale()
+	end
+	api.SetAutoScale = function(on)
+		autoScale = on == true
+		applyScale()
+	end
+	api.SetPosition = function(pos)
+		if typeof(pos) == "UDim2" then
+			Root.Position = pos
+		end
+	end
+	api.SetVisible = function(on)
+		Gui.Enabled = on == true
+	end
+	api.ToggleVisible = function()
+		Gui.Enabled = not Gui.Enabled
+	end
+	api.IsVisible = function()
+		return Gui.Enabled
+	end
+	api.Destroy = function()
+		if Gui.Parent then
+			Gui:Destroy()
+		end
+	end
+	api.SetShowFps = function(on)
+		showFps = on == true
+		relayoutStats()
+		relayout()
+	end
+	api.SetShowPing = function(on)
+		showPing = on == true
+		relayoutStats()
+		relayout()
+	end
+	api.GetFps = function()
+		return fpsNow
+	end
+	api.GetPing = function()
+		return pingNow
+	end
+	api.AddToggle = function(spec)
+		local d = parseTarget(spec)
+		if not d then
+			warn("[Skibidi] StatusHUD: toggle target must be a panel, a GUI instance or { Name, Get, Set }")
+			return nil
+		end
+		return buildToggle(d)
+	end
+	api.RemoveToggle = function(handle)
+		if handle and handle.Remove then
+			handle.Remove()
+		end
+	end
+	api.ClearToggles = function()
+		for i = #entries, 1, -1 do
+			entries[i].Remove()
+		end
+	end
+	api.SetToggleTargets = function(list)
+		api.ClearToggles()
+		for _, spec in ipairs(list or {}) do
+			api.AddToggle(spec)
+		end
+	end
+
+	-- ── Initial build ───────────────────────────────────────
+	SetText(TitleLabel, titleRaw)
+	SetText(SubLabel, subRaw)
+
+	local tg = Options.Toggler
+	local initial
+	if tg == true then
+		initial = source and { source } or {}
+	elseif type(tg) == "table" then
+		if tg.Gui ~= nil or tg.Target ~= nil or tg.Get ~= nil then
+			initial = { tg } -- a single panel / descriptor
+		elseif
+			tg.Targets ~= nil
+			or tg.Title ~= nil
+			or tg.Columns ~= nil
+			or tg.OnToggle ~= nil
+		then
+			togglerOpts = tg
+			initial = tg.Targets or (source and { source }) or {}
+		else
+			initial = tg -- a bare array of targets
+		end
+	elseif typeof(tg) == "Instance" then
+		initial = { tg }
+	end
+	onToggle = togglerOpts.OnToggle
+	if initial then
+		ensureToggler()
+		for _, spec in ipairs(initial) do
+			api.AddToggle(spec)
+		end
+	end
+
+	relayoutStats()
+	relayout()
+	applyScale()
+
+	return api
+end
+
+-- ============================================================
 -- Unload
 -- Destroys every panel, notification and tooltip the library has
 -- created and clears internal state. Safe to call multiple times.
@@ -8334,6 +9489,8 @@ function Skibidi.Unload()
 		_overlayWatch = nil
 	end
 	_openOverlay = nil
+	_Hub.panels = {}
+	_Hub.watchers = {}
 	for k in pairs(Flags) do
 		Flags[k] = nil
 	end
@@ -8375,6 +9532,8 @@ Skibidi.addtranslations = Skibidi.AddTranslations
 Skibidi.translate = Skibidi.Translate
 Skibidi.label = Skibidi.CreateLabel
 Skibidi.keyvalue = Skibidi.CreateKeyValue
+Skibidi.statushud = Skibidi.CreateStatusHUD
+Skibidi.hud = Skibidi.CreateStatusHUD
 Skibidi.button = Skibidi.CreateButton
 Skibidi.cardlist = Skibidi.CreateCardList
 Skibidi.code = Skibidi.CreateCode
