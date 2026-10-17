@@ -8472,7 +8472,9 @@ function Skibidi.CreateStatusHUD(Options)
 	local pingGood, pingOk = Options.PingGood or 80, Options.PingOk or 150
 	local updateRate = math.max(Options.UpdateRate or 0.5, 0.05)
 	local GAP = 6 -- gap between chips / buttons
-	local PAD_X, PAD_Y = 10, 8
+	local PAD_X, PAD_Y = 12, 7
+	local LIST_GAP = 6 -- vertical gap between header / stats / toggler
+	local HEADER_H, RULE_H, STATS_H = 20, 1, 26
 	local CELL_H = 24 -- toggle button height
 
 	local function parseSize(s)
@@ -8562,7 +8564,7 @@ function Skibidi.CreateStatusHUD(Options)
 	Root.Name = "Root"
 	Root.AnchorPoint = Options.AnchorPoint or Vector2.new(0.5, 0)
 	Root.Position = Options.Position or UDim2.new(0.5, 0, 0, 10)
-	Root.Size = UDim2.new(0, 240, 0, 0)
+	Root.Size = UDim2.new(0, 280, 0, 90)
 	Root.BackgroundTransparency = 1
 	Root.BorderSizePixel = 0
 	Root.Parent = Gui
@@ -8601,8 +8603,7 @@ function Skibidi.CreateStatusHUD(Options)
 
 	local Card = Instance.new("Frame")
 	Card.Name = "Card"
-	Card.Size = UDim2.new(1, 0, 0, 0)
-	Card.AutomaticSize = Enum.AutomaticSize.Y
+	Card.Size = UDim2.new(1, 0, 1, 0)
 	Card.BackgroundColor3 = Theme.Bg1
 	Card.BackgroundTransparency = 0.04
 	Card.BorderSizePixel = 0
@@ -8619,9 +8620,10 @@ function Skibidi.CreateStatusHUD(Options)
 		end
 	end
 	MakePadding(Card, PAD_X, PAD_X, PAD_Y, PAD_Y)
-	-- Everything sits on one vertical axis, centred. With a fixed height the
-	-- stack centres vertically too instead of hugging the top.
-	MakeListLayout(Card, Enum.FillDirection.Vertical, 7, Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Center)
+	-- Everything sits on one axis, centred both ways. The card's height is
+	-- computed from its contents (see relayout) rather than auto-sized, so
+	-- there is never spare room above or below the stack.
+	MakeListLayout(Card, Enum.FillDirection.Vertical, LIST_GAP, Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Center)
 
 	-- Entrance pop, on the card so the shadow does not fight it.
 	local PopScale = Instance.new("UIScale")
@@ -8635,7 +8637,7 @@ function Skibidi.CreateStatusHUD(Options)
 	local Header = Instance.new("Frame")
 	Header.Name = "Header"
 	Header.LayoutOrder = 1
-	Header.Size = UDim2.new(1, 0, 0, 20)
+	Header.Size = UDim2.new(1, 0, 0, HEADER_H)
 	Header.BackgroundTransparency = 1
 	Header.BorderSizePixel = 0
 	Header.ZIndex = 2
@@ -8706,7 +8708,7 @@ function Skibidi.CreateStatusHUD(Options)
 		local R = Instance.new("Frame")
 		R.Name = "Rule"
 		R.LayoutOrder = order
-		R.Size = UDim2.new(1, -8, 0, 1)
+		R.Size = UDim2.new(1, -8, 0, RULE_H)
 		R.BackgroundColor3 = Lighten(Accent, 0.10)
 		R.BackgroundTransparency = 0.35
 		R.BorderSizePixel = 0
@@ -8728,7 +8730,7 @@ function Skibidi.CreateStatusHUD(Options)
 	local StatsRow = Instance.new("Frame")
 	StatsRow.Name = "Stats"
 	StatsRow.LayoutOrder = 3
-	StatsRow.Size = UDim2.new(1, 0, 0, 26)
+	StatsRow.Size = UDim2.new(1, 0, 0, STATS_H)
 	StatsRow.BackgroundTransparency = 1
 	StatsRow.BorderSizePixel = 0
 	StatsRow.ZIndex = 2
@@ -8816,8 +8818,9 @@ function Skibidi.CreateStatusHUD(Options)
 	end
 
 	-- ── Layout: width, title limits, header visibility ──────
-	local baseW = 240
+	local baseW = 280
 	local togglerSection, togglerGrid, relayoutToggles -- built on demand
+	local togglerCaption = false
 
 	local function headerShown()
 		return titleRaw ~= "" or subRaw ~= ""
@@ -8830,7 +8833,7 @@ function Skibidi.CreateStatusHUD(Options)
 		local tw = measure(TitleLabel.Text, Theme.TitleSize, Theme.FontBold)
 		local sw = SubLabel.Text ~= "" and (measure(SubLabel.Text, Theme.CaptionSize, Theme.FontMedium) + 14 + 8) or 0
 		local need = PAD_X * 2 + (TitleLabel.Text ~= "" and (11 + tw + 4) or 0) + sw
-		return math.clamp(math.ceil(need), 230, 420)
+		return math.clamp(math.ceil(need), 280, 460)
 	end
 
 	local function relayout()
@@ -8838,22 +8841,45 @@ function Skibidi.CreateStatusHUD(Options)
 		Pip.Visible = TitleLabel.Text ~= ""
 		SubPill.Visible = SubLabel.Text ~= ""
 		Header.Visible = headerShown()
-		HeaderRule.Visible = headerShown() and (StatsRow.Visible or (togglerSection and togglerSection.Visible) or false)
 
 		baseW = computeWidth()
-		Root.Size = UDim2.new(0, baseW, 0, fixedH or 0)
-		Root.AutomaticSize = fixedH and Enum.AutomaticSize.None or Enum.AutomaticSize.Y
-		Card.Size = fixedH and UDim2.new(1, 0, 1, 0) or UDim2.new(1, 0, 0, 0)
-		Card.AutomaticSize = fixedH and Enum.AutomaticSize.None or Enum.AutomaticSize.Y
 
 		-- A long title truncates inside the card instead of spilling out.
 		local subW = SubPill.Visible and (measure(SubLabel.Text, Theme.CaptionSize, Theme.FontMedium) + 14 + 8) or 0
 		local avail = baseW - PAD_X * 2 - (Pip.Visible and 11 or 0) - subW - 2
 		TitleLimit.MaxSize = Vector2.new(math.max(avail, 20), 1000)
 
+		-- The toggler lays itself out first: whether it shows, and how tall
+		-- it is, decide the rule and the card height below.
+		local togglerH = 0
 		if relayoutToggles then
-			relayoutToggles()
+			togglerH = relayoutToggles()
 		end
+		local togglerShown = togglerSection and togglerSection.Visible or false
+		HeaderRule.Visible = headerShown() and (StatsRow.Visible or togglerShown)
+
+		-- Card height = what is actually showing + gaps + padding, so the
+		-- contents fill the card with nothing left over above or below.
+		local parts = {}
+		if Header.Visible then
+			table.insert(parts, HEADER_H)
+		end
+		if HeaderRule.Visible then
+			table.insert(parts, RULE_H)
+		end
+		if StatsRow.Visible then
+			table.insert(parts, STATS_H)
+		end
+		if togglerShown then
+			table.insert(parts, togglerH)
+		end
+		local h = PAD_Y * 2
+		for i, v in ipairs(parts) do
+			h = h + v + (i > 1 and LIST_GAP or 0)
+		end
+		h = math.max(h, 30)
+
+		Root.Size = UDim2.new(0, baseW, 0, fixedH or h)
 	end
 
 	local function setTitleText(raw)
@@ -8937,8 +8963,7 @@ function Skibidi.CreateStatusHUD(Options)
 		togglerSection = Instance.new("Frame")
 		togglerSection.Name = "Toggler"
 		togglerSection.LayoutOrder = 4
-		togglerSection.Size = UDim2.new(1, 0, 0, 0)
-		togglerSection.AutomaticSize = Enum.AutomaticSize.Y
+		togglerSection.Size = UDim2.new(1, 0, 0, CELL_H)
 		togglerSection.BackgroundTransparency = 1
 		togglerSection.BorderSizePixel = 0
 		togglerSection.ZIndex = 2
@@ -8948,7 +8973,8 @@ function Skibidi.CreateStatusHUD(Options)
 
 		makeRule(togglerSection, 1)
 
-		if togglerOpts.Title and togglerOpts.Title ~= "" then
+		togglerCaption = togglerOpts.Title ~= nil and togglerOpts.Title ~= ""
+		if togglerCaption then
 			local Cap = Instance.new("TextLabel")
 			Cap.LayoutOrder = 2
 			Cap.Size = UDim2.new(1, 0, 0, 14)
@@ -8984,14 +9010,18 @@ function Skibidi.CreateStatusHUD(Options)
 			local n = #entries
 			togglerSection.Visible = n > 0
 			if n == 0 then
-				return
+				return 0
 			end
 			local cols = togglerOpts.Columns or (n >= 3 and 3 or n)
 			cols = math.max(1, math.min(cols, n))
 			gl.CellSize = UDim2.new(1 / cols, -(GAP * (cols - 1)) / cols, 0, CELL_H)
 			gl.FillDirectionMaxCells = cols
 			local rows = math.ceil(n / cols)
-			togglerGrid.Size = UDim2.new(1, 0, 0, rows * CELL_H + (rows - 1) * GAP)
+			local gridH = rows * CELL_H + (rows - 1) * GAP
+			togglerGrid.Size = UDim2.new(1, 0, 0, gridH)
+			-- rule + (caption) + grid, with the section's own 6px gaps
+			local sectionH = RULE_H + 6 + (togglerCaption and (14 + 6) or 0) + gridH
+			togglerSection.Size = UDim2.new(1, 0, 0, sectionH)
 
 			-- Each label gets exactly the room its cell has, so a long name
 			-- truncates inside the button rather than overflowing it.
@@ -9001,6 +9031,7 @@ function Skibidi.CreateStatusHUD(Options)
 				local want = math.ceil(measure(e.Label.Text, Theme.CaptionSize, Theme.FontMedium)) + 2
 				e.Label.Size = UDim2.new(0, math.max(10, math.min(want, room)), 0, 16)
 			end
+			return sectionH
 		end
 	end
 
