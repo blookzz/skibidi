@@ -7808,8 +7808,9 @@ function Skibidi.CreateCardList(Parent, Options)
 		end
 
 		local holder = Instance.new("Frame")
+		holder.AnchorPoint = Vector2.new(0, 0.5)
 		holder.Size = UDim2.new(0, size, 0, size)
-		holder.Position = UDim2.new(0, 10, 0.5, -size / 2)
+		holder.Position = UDim2.new(0, 10, 0.5, 0)
 		holder.BackgroundTransparency = 1
 		holder.BorderSizePixel = 0
 		holder.ClipsDescendants = false
@@ -7936,12 +7937,12 @@ function Skibidi.CreateCardList(Parent, Options)
 				info,
 				{ Color = on and Theme.Accent or EdgeRest(), Transparency = on and 0 or (Theme.StrokeAlpha or 0.34) }
 			):Play()
-			TweenService:Create(card.Tick, info, { Size = UDim2.new(0, 3, 0, on and 22 or 0) }):Play()
+			TweenService:Create(card.Tick, info, { Size = UDim2.new(0, 3, 0, on and card.TickMax or 0) }):Play()
 		else
 			card.Frame.BackgroundColor3, card.Title.TextColor3 = bg, text
 			card.Edge.Color, card.Edge.Transparency =
 				on and Theme.Accent or EdgeRest(), on and 0 or (Theme.StrokeAlpha or 0.34)
-			card.Tick.Size = UDim2.new(0, 3, 0, on and 22 or 0)
+			card.Tick.Size = UDim2.new(0, 3, 0, on and card.TickMax or 0)
 		end
 		card.Check.Text = on and "✓" or ""
 	end
@@ -7974,7 +7975,10 @@ function Skibidi.CreateCardList(Parent, Options)
 		-- Keep the visual nearly as tall as the card, leaving a small vertical
 		-- inset so it never touches the rounded card edges. VisualSize remains
 		-- available when a fixed thumbnail size is preferred.
-		local visualSize = Options.VisualSize or math.max(20, cardHeight - 12)
+		-- Clamped to the card height (minus a small inset) so the visual can
+		-- never spill outside the card, even with a large VisualSize.
+		local maxVisual = math.max(8, cardHeight - 8)
+		local visualSize = math.min(Options.VisualSize or math.max(20, cardHeight - 12), maxVisual)
 		local hasVisual = data.Visual ~= nil
 			or data.Image ~= nil
 			or data.Asset ~= nil
@@ -7985,44 +7989,88 @@ function Skibidi.CreateCardList(Parent, Options)
 			makeVisual(Button, data, visualSize)
 		end
 		local left = hasVisual and (visualSize + 20) or 12
-		local title = Instance.new("TextLabel", Button)
-		title.Size = UDim2.new(1, -(left + 42), 0, data.Description and 20 or cardHeight - 16)
-		title.Position = UDim2.new(0, left, 0, data.Description and 10 or 0)
+		local hasDesc = data.Description ~= nil and data.Description ~= ""
+
+		-- Text sizes shrink proportionally if title + description would not
+		-- fit inside the card height, so nothing ever overflows.
+		local titleSize = Options.TitleSize or Theme.BodySize
+		local descSize = Options.DescriptionSize or Theme.CaptionSize
+		local textGap = hasDesc and 2 or 0
+		local available = math.max(10, cardHeight - 10)
+		local needed = (titleSize + 4) + (hasDesc and (descSize + 4 + textGap) or 0)
+		if needed > available then
+			local k = available / needed
+			titleSize = math.max(8, math.floor(titleSize * k))
+			descSize = math.max(8, math.floor(descSize * k))
+		end
+		local titleH = titleSize + 4
+		local descH = descSize + 4
+
+		-- One container, vertically centered on the card. A vertical list
+		-- layout centers whatever it holds: title alone, or title + description
+		-- as a single block.
+		local textBlock = Instance.new("Frame", Button)
+		textBlock.Name = "Text"
+		textBlock.AnchorPoint = Vector2.new(0, 0.5)
+		textBlock.Position = UDim2.new(0, left, 0.5, 0)
+		textBlock.Size = UDim2.new(1, -(left + 42), 0, titleH + (hasDesc and (descH + textGap) or 0))
+		textBlock.BackgroundTransparency = 1
+		textBlock.BorderSizePixel = 0
+		textBlock.ZIndex = 3
+		local textLayout = Instance.new("UIListLayout", textBlock)
+		textLayout.FillDirection = Enum.FillDirection.Vertical
+		textLayout.SortOrder = Enum.SortOrder.LayoutOrder
+		textLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+		textLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+		textLayout.Padding = UDim.new(0, textGap)
+
+		local title = Instance.new("TextLabel", textBlock)
+		title.LayoutOrder = 1
+		title.Size = UDim2.new(1, 0, 0, titleH)
 		title.BackgroundTransparency = 1
 		title.Font = Theme.FontMedium
-		title.TextSize = Options.TitleSize or Theme.BodySize
+		title.TextSize = titleSize
 		title.TextColor3 = Theme.TextPrimary
 		title.TextXAlignment = Enum.TextXAlignment.Left
+		title.TextYAlignment = Enum.TextYAlignment.Center
 		title.TextTruncate = Enum.TextTruncate.AtEnd
+		title.ZIndex = 3
 		SetText(title, data.Name or data.Title)
 		local desc
-		if data.Description then
-			desc = Instance.new("TextLabel", Button)
-			desc.Size = UDim2.new(1, -(left + 42), 0, 18)
-			desc.Position = UDim2.new(0, left, 0, 31)
+		if hasDesc then
+			desc = Instance.new("TextLabel", textBlock)
+			desc.LayoutOrder = 2
+			desc.Size = UDim2.new(1, 0, 0, descH)
 			desc.BackgroundTransparency = 1
 			desc.Font = Theme.FontRegular
-			desc.TextSize = Options.DescriptionSize or Theme.CaptionSize
+			desc.TextSize = descSize
 			desc.TextColor3 = Theme.TextMuted
 			desc.TextXAlignment = Enum.TextXAlignment.Left
+			desc.TextYAlignment = Enum.TextYAlignment.Center
 			desc.TextTruncate = Enum.TextTruncate.AtEnd
+			desc.ZIndex = 3
 			SetText(desc, data.Description)
 		end
 		local tick = Instance.new("Frame", Button)
-		tick.Position = UDim2.new(0, 0, 0.5, -11)
-		tick.Size = UDim2.new(0, 0, 0, 22)
+		-- Anchored at its vertical middle so it grows outward from center.
+		local tickMax = math.clamp(cardHeight - 16, 6, 22)
+		tick.AnchorPoint = Vector2.new(0, 0.5)
+		tick.Position = UDim2.new(0, 0, 0.5, 0)
+		tick.Size = UDim2.new(0, 3, 0, 0)
 		tick.BackgroundColor3 = Theme.Accent
 		tick.BorderSizePixel = 0
 		tick.ZIndex = 4
 		MakeCorner(tick, UDim.new(1, 0))
 		local check = Instance.new("TextLabel", Button)
+		check.AnchorPoint = Vector2.new(1, 0.5)
 		check.Size = UDim2.new(0, 28, 1, 0)
-		check.Position = UDim2.new(1, -34, 0, 0)
+		check.Position = UDim2.new(1, -8, 0.5, 0)
 		check.BackgroundTransparency = 1
 		check.Font = Theme.FontIcon
 		check.TextSize = 18
 		check.TextColor3 = Theme.Accent
 		check.TextXAlignment = Enum.TextXAlignment.Center
+		check.TextYAlignment = Enum.TextYAlignment.Center
 		check.ZIndex = 4
 		local value = data.Selected == true or data.Default == true
 		local disabled = data.Disabled == true or Options.Disabled == true
@@ -8033,6 +8081,7 @@ function Skibidi.CreateCardList(Parent, Options)
 			Description = desc,
 			Edge = edge,
 			Tick = tick,
+			TickMax = tickMax,
 			Check = check,
 			Data = data,
 			Disabled = disabled,
