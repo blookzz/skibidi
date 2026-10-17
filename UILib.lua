@@ -8474,8 +8474,10 @@ function Skibidi.CreateStatusHUD(Options)
 	local GAP = 6 -- gap between chips / buttons
 	local PAD_X, PAD_Y = 12, 7
 	local LIST_GAP = 6 -- vertical gap between header / stats / toggler
-	local HEADER_H, RULE_H, STATS_H = 20, 1, 26
-	local CELL_H = 24 -- toggle button height
+	-- Same heights as the rest of the library: rows/buttons use RowHeight,
+	-- the title bar uses the panel header's HeaderHeight.
+	local HEADER_H, RULE_H, STATS_H = Theme.HeaderHeight, 1, Theme.RowHeight
+	local CELL_H = Theme.RowHeight -- toggle button height
 
 	local function parseSize(s)
 		if typeof(s) == "Vector2" then
@@ -8564,7 +8566,7 @@ function Skibidi.CreateStatusHUD(Options)
 	Root.Name = "Root"
 	Root.AnchorPoint = Options.AnchorPoint or Vector2.new(0.5, 0)
 	Root.Position = Options.Position or UDim2.new(0.5, 0, 0, 10)
-	Root.Size = UDim2.new(0, 280, 0, 90)
+	Root.Size = UDim2.new(0, 560, 0, 100)
 	Root.BackgroundTransparency = 1
 	Root.BorderSizePixel = 0
 	Root.Parent = Gui
@@ -8619,11 +8621,20 @@ function Skibidi.CreateStatusHUD(Options)
 			MakeCorner(grain, UDim.new(0, Theme.CornerRadius))
 		end
 	end
-	MakePadding(Card, PAD_X, PAD_X, PAD_Y, PAD_Y)
+	-- The grain texture is an ImageLabel child of Card; a list layout on Card
+	-- itself would treat it as a full-height row and shove everything down.
+	-- So the layout lives on Content, which only ever holds real rows.
+	local Content = Instance.new("Frame")
+	Content.Name = "Content"
+	Content.Size = UDim2.new(1, 0, 1, 0)
+	Content.BackgroundTransparency = 1
+	Content.BorderSizePixel = 0
+	Content.ZIndex = 2
+	Content.Parent = Card
+	MakePadding(Content, PAD_X, PAD_X, PAD_Y, PAD_Y)
 	-- Everything sits on one axis, centred both ways. The card's height is
-	-- computed from its contents (see relayout) rather than auto-sized, so
-	-- there is never spare room above or below the stack.
-	MakeListLayout(Card, Enum.FillDirection.Vertical, LIST_GAP, Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Center)
+	-- computed from its contents (see relayout) rather than auto-sized.
+	MakeListLayout(Content, Enum.FillDirection.Vertical, LIST_GAP, Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Center)
 
 	-- Entrance pop, on the card so the shadow does not fight it.
 	local PopScale = Instance.new("UIScale")
@@ -8641,7 +8652,7 @@ function Skibidi.CreateStatusHUD(Options)
 	Header.BackgroundTransparency = 1
 	Header.BorderSizePixel = 0
 	Header.ZIndex = 2
-	Header.Parent = Card
+	Header.Parent = Content
 	MakeListLayout(Header, Enum.FillDirection.Horizontal, 8, Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Center)
 
 	local Pip = Instance.new("Frame")
@@ -8724,7 +8735,7 @@ function Skibidi.CreateStatusHUD(Options)
 		g.Parent = R
 		return R
 	end
-	local HeaderRule = makeRule(Card, 2)
+	local HeaderRule = makeRule(Content, 2)
 
 	-- ── Stats row ───────────────────────────────────────────
 	local StatsRow = Instance.new("Frame")
@@ -8734,7 +8745,7 @@ function Skibidi.CreateStatusHUD(Options)
 	StatsRow.BackgroundTransparency = 1
 	StatsRow.BorderSizePixel = 0
 	StatsRow.ZIndex = 2
-	StatsRow.Parent = Card
+	StatsRow.Parent = Content
 	MakeListLayout(StatsRow, Enum.FillDirection.Horizontal, GAP, Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Center)
 
 	local stats = {}
@@ -8775,10 +8786,10 @@ function Skibidi.CreateStatusHUD(Options)
 		local Key = Instance.new("TextLabel")
 		Key.LayoutOrder = 2
 		Key.AutomaticSize = Enum.AutomaticSize.X
-		Key.Size = UDim2.new(0, 0, 0, 16)
+		Key.Size = UDim2.new(0, 0, 0, 18)
 		Key.BackgroundTransparency = 1
 		Key.Font = Theme.FontMedium
-		Key.TextSize = Theme.CaptionSize
+		Key.TextSize = Theme.SmallSize
 		Key.TextColor3 = Theme.TextMuted
 		Key.TextXAlignment = Enum.TextXAlignment.Center
 		Key.TextYAlignment = Enum.TextYAlignment.Center
@@ -8788,10 +8799,10 @@ function Skibidi.CreateStatusHUD(Options)
 
 		local Val = Instance.new("TextLabel")
 		Val.LayoutOrder = 3
-		Val.Size = UDim2.new(0, math.ceil(measure(sample, Theme.SmallSize, Theme.FontBold)) + 2, 0, 16)
+		Val.Size = UDim2.new(0, math.ceil(measure(sample, Theme.BodySize, Theme.FontBold)) + 2, 0, 18)
 		Val.BackgroundTransparency = 1
 		Val.Font = Theme.FontBold
-		Val.TextSize = Theme.SmallSize
+		Val.TextSize = Theme.BodySize
 		Val.TextColor3 = Theme.AccentSec
 		Val.TextXAlignment = Enum.TextXAlignment.Center
 		Val.TextYAlignment = Enum.TextYAlignment.Center
@@ -8818,7 +8829,7 @@ function Skibidi.CreateStatusHUD(Options)
 	end
 
 	-- ── Layout: width, title limits, header visibility ──────
-	local baseW = 280
+	local baseW = 560
 	local togglerSection, togglerGrid, relayoutToggles -- built on demand
 	local togglerCaption = false
 
@@ -8833,7 +8844,7 @@ function Skibidi.CreateStatusHUD(Options)
 		local tw = measure(TitleLabel.Text, Theme.TitleSize, Theme.FontBold)
 		local sw = SubLabel.Text ~= "" and (measure(SubLabel.Text, Theme.CaptionSize, Theme.FontMedium) + 14 + 8) or 0
 		local need = PAD_X * 2 + (TitleLabel.Text ~= "" and (11 + tw + 4) or 0) + sw
-		return math.clamp(math.ceil(need), 280, 460)
+		return math.clamp(math.ceil(need), 560, 920)
 	end
 
 	local function relayout()
@@ -8968,7 +8979,7 @@ function Skibidi.CreateStatusHUD(Options)
 		togglerSection.BorderSizePixel = 0
 		togglerSection.ZIndex = 2
 		togglerSection.Visible = false
-		togglerSection.Parent = Card
+		togglerSection.Parent = Content
 		MakeListLayout(togglerSection, Enum.FillDirection.Vertical, 6, Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Top)
 
 		makeRule(togglerSection, 1)
@@ -9028,8 +9039,8 @@ function Skibidi.CreateStatusHUD(Options)
 			local cellPx = (baseW - PAD_X * 2 - GAP * (cols - 1)) / cols
 			for _, e in ipairs(entries) do
 				local room = cellPx - 12 - 6 - 6 - (e.Icon and 20 or 0)
-				local want = math.ceil(measure(e.Label.Text, Theme.CaptionSize, Theme.FontMedium)) + 2
-				e.Label.Size = UDim2.new(0, math.max(10, math.min(want, room)), 0, 16)
+				local want = math.ceil(measure(e.Label.Text, Theme.BodySize, Theme.FontMedium)) + 2
+				e.Label.Size = UDim2.new(0, math.max(10, math.min(want, room)), 0, 18)
 			end
 			return sectionH
 		end
@@ -9081,10 +9092,10 @@ function Skibidi.CreateStatusHUD(Options)
 
 		local Label = Instance.new("TextLabel")
 		Label.LayoutOrder = 3
-		Label.Size = UDim2.new(0, 40, 0, 16)
+		Label.Size = UDim2.new(0, 40, 0, 18)
 		Label.BackgroundTransparency = 1
 		Label.Font = Theme.FontMedium
-		Label.TextSize = Theme.CaptionSize
+		Label.TextSize = Theme.BodySize
 		Label.TextColor3 = Theme.TextPrimary
 		Label.TextXAlignment = Enum.TextXAlignment.Center
 		Label.TextYAlignment = Enum.TextYAlignment.Center
