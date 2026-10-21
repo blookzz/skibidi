@@ -526,13 +526,13 @@ local Theme = {
 	-- performance budget is tight; nothing else in the library depends
 	-- on them being enabled.
 	Glow = true, -- soft accent bloom behind panels/controls
-	GlowStrength = 0.72, -- transparency of the bloom (0 = solid, 1 = off)
+	GlowStrength = 0.82, -- transparency of the bloom (0 = solid, 1 = off)
 	AnimatedBorder = true, -- slowly rotating gradient on panel strokes
 	BorderSpeed = 22, -- degrees per second for the above
 	Ripple = true, -- click ripple on buttons/rows
 	Shine = true, -- diagonal light sweep across hovered buttons
 	Grain = true, -- faint texture over large surfaces
-	GrainStrength = 0.965, -- ImageTransparency of the texture layer
+	GrainStrength = 0.975, -- ImageTransparency of the texture layer
 	Blur = false, -- global 3D blur while any panel is open
 	Gloss = true, -- vertical light gradient over cards and rows
 	LitEdge = true, -- outlines that catch light along their top edge
@@ -1216,6 +1216,13 @@ local function MakeGrain(parent)
 	N.TileSize = UDim2.new(0, 128, 0, 128)
 	N.ZIndex = 0
 	N.Parent = parent
+	-- The texture is a full-bleed rectangle; without its own rounding its
+	-- square corners poke past a rounded parent (ClipsDescendants cannot
+	-- follow a UICorner).
+	local pc = parent:FindFirstChildOfClass("UICorner")
+	if pc then
+		MakeCorner(N, pc.CornerRadius)
+	end
 	return N
 end
 
@@ -1228,11 +1235,15 @@ local function MakeRipple(button, color, radius)
 		return
 	end
 
-	local Host = Instance.new("Frame")
+	-- A CanvasGroup, not a Frame: it is the only container whose clipping
+	-- follows its UICorner, so the ripple stays inside the rounded outline
+	-- instead of filling the button's square corners.
+	local Host = Instance.new("CanvasGroup")
 	Host.Name = "SkibidiRippleHost"
 	Host.Size = UDim2.new(1, 0, 1, 0)
 	Host.BackgroundTransparency = 1
 	Host.BorderSizePixel = 0
+	Host.GroupTransparency = 0
 	Host.ClipsDescendants = true
 	Host.ZIndex = (button.ZIndex or 1)
 	Host.Parent = button
@@ -2799,6 +2810,33 @@ function Skibidi.CreatePanel(Options)
 	MakeCorner(Header, UDim.new(0, Theme.CornerRadius))
 	MakeGloss(Header, 0.14)
 
+	-- The header is rounded so its top corners follow the panel, but that
+	-- also rounds its bottom corners and leaves a scalloped notch where it
+	-- meets the body. A square patch over the lower half restores them;
+	-- its gradient is the matching slice of the header's gloss so there is
+	-- no visible seam. Hidden while minimized, when the bottom is the
+	-- panel's own rounded edge.
+	local HeaderPatch = Instance.new("Frame")
+	HeaderPatch.Name = "SkibidiHeaderPatch"
+	do
+		local R = Theme.CornerRadius
+		HeaderPatch.Size = UDim2.new(1, 0, 0, R)
+		HeaderPatch.Position = UDim2.new(0, 0, 1, -R)
+		HeaderPatch.BackgroundColor3 = Theme.Bg0
+		HeaderPatch.BorderSizePixel = 0
+		HeaderPatch.ZIndex = 2
+		HeaderPatch.Parent = Header
+		if Theme.Gloss then
+			local lo = 1 - 0.14
+			local t0 = math.max(1 - R / HEADER_H, 0.45)
+			local v0 = 1 + (lo - 1) * (t0 - 0.45) / 0.55
+			local g = Instance.new("UIGradient")
+			g.Rotation = 90
+			g.Color = ColorSequence.new(Color3.new(v0, v0, v0), Color3.new(lo, lo, lo))
+			g.Parent = HeaderPatch
+		end
+	end
+
 	-- Accent wash across the header: strongest on the left behind the
 	-- title, gone by the middle, so the title sits in its own pool of
 	-- colour without tinting the buttons on the right.
@@ -3563,6 +3601,7 @@ function Skibidi.CreatePanel(Options)
 
 		MinBtn.Text = isMinimized and "+" or "–"
 		AccentLine.Visible = not isMinimized
+		HeaderPatch.Visible = not isMinimized
 
 		if instant then
 			if isMinimized then
