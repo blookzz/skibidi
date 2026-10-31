@@ -2,7 +2,7 @@
 -- ============================================================
 -- Skibidi Glass  |  glassmorphic UI library for Roblox
 --
---   local Library = loadstring(game:HttpGet("<raw url>/SkibidiGlassUI.lua"))()
+--   local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/blookzz/skibidi/refs/heads/main/SkibidiGlassUI.lua"))()
 --   local Toggles, Options = Library.Toggles, Library.Options
 --
 --   local Window = Library:CreateWindow({
