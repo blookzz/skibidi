@@ -1615,6 +1615,49 @@ local function _positionTooltip()
 	_tooltipFrame.Position = UDim2.fromOffset(x, y)
 end
 
+-- The element currently showing the tooltip. MouseLeave does not fire
+-- when a GUI is disabled, hidden, faded out or destroyed underneath the
+-- cursor (e.g. closing or toggling the panel), so while the tooltip is up
+-- a Heartbeat watcher hides it the moment its owner stops being
+-- visible or the mouse is no longer over it.
+local _tooltipOwner, _tooltipWatch
+
+local function _hideTooltip()
+	_tooltipOwner = nil
+	if _tooltipWatch then
+		_tooltipWatch:Disconnect()
+		_tooltipWatch = nil
+	end
+	if _tooltipFrame then
+		_tooltipFrame.Visible = false
+	end
+end
+
+local function _ownerShown(o)
+	if not o or not o.Parent or not o:IsDescendantOf(game) then
+		return false
+	end
+	local node = o
+	while node and node ~= game do
+		if node:IsA("GuiObject") then
+			if not node.Visible then
+				return false
+			end
+		elseif node:IsA("LayerCollector") then
+			if not node.Enabled then
+				return false
+			end
+			break
+		end
+		node = node.Parent
+	end
+	local loc = UserInputService:GetMouseLocation()
+	local inset = GuiService:GetGuiInset()
+	local mx, my = loc.X - inset.X, loc.Y - inset.Y
+	local p, sz = o.AbsolutePosition, o.AbsoluteSize
+	return mx >= p.X and mx <= p.X + sz.X and my >= p.Y and my <= p.Y + sz.Y
+end
+
 local function AttachTooltip(target, text)
 	if not text or text == "" then
 		return
@@ -1622,22 +1665,30 @@ local function AttachTooltip(target, text)
 	target.MouseEnter:Connect(function()
 		_ensureTooltip()
 		SetText(_tooltipLbl, text)
+		_tooltipOwner = target
 		_tooltipFrame.Visible = true
 		_positionTooltip()
+		if not _tooltipWatch then
+			_tooltipWatch = RunService.Heartbeat:Connect(function()
+				if not _ownerShown(_tooltipOwner) then
+					_hideTooltip()
+				end
+			end)
+		end
 	end)
 	target.MouseMoved:Connect(function()
-		if _tooltipFrame and _tooltipFrame.Visible then
+		if _tooltipOwner == target and _tooltipFrame and _tooltipFrame.Visible then
 			_positionTooltip()
 		end
 	end)
 	target.MouseLeave:Connect(function()
-		if _tooltipFrame then
-			_tooltipFrame.Visible = false
+		if _tooltipOwner == target then
+			_hideTooltip()
 		end
 	end)
 	target.Destroying:Connect(function()
-		if _tooltipFrame then
-			_tooltipFrame.Visible = false
+		if _tooltipOwner == target then
+			_hideTooltip()
 		end
 	end)
 end
@@ -3976,6 +4027,7 @@ function Skibidi.CreatePanel(Options)
 			return
 		end
 		closing = true
+		_hideTooltip()
 		local extra = {}
 		for _, L in ipairs(shadowLayers) do
 			extra[#extra + 1] = L.Obj
@@ -4259,9 +4311,12 @@ function Skibidi.CreatePanel(Options)
 	-- ── Visibility (programmatic + optional hotkey) ────────
 	local function SetVisible(visible)
 		Gui.Enabled = visible == true
+		if not Gui.Enabled then
+			_hideTooltip()
+		end
 	end
 	local function ToggleVisible()
-		Gui.Enabled = not Gui.Enabled
+		SetVisible(not Gui.Enabled)
 	end
 	do
 		local tk = Options.ToggleKey
@@ -9646,6 +9701,7 @@ function Skibidi.Unload()
 		_notifSg = nil
 	end
 	_notifList = {}
+	_hideTooltip()
 	if _tooltipSg then
 		_tooltipSg:Destroy()
 		_tooltipSg = nil
